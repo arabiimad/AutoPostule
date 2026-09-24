@@ -87,7 +87,9 @@ try {
 
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1200);
-  check('premiers pas affichés au premier lancement', await page.getByText('Bienvenue sur AutoPostule').isVisible());
+  check('marque Kareer : écran de démarrage remplacé, logo et titre', (await page.locator('#boot').count()) === 0
+    && await page.getByRole('button', { name: 'Kareer — accueil' }).isVisible() && /^Kareer/.test(await page.title()));
+  check('premiers pas affichés au premier lancement', await page.getByText('Bienvenue sur Kareer').isVisible());
 
   // Import du CV (texte collé)
   await page.getByRole('button', { name: /Importer mon CV/ }).first().click();
@@ -96,7 +98,7 @@ try {
   await page.getByRole('button', { name: /Analyser mon CV/ }).click();
   await page.getByRole('button', { name: /Confirmer et enregistrer/ }).click({ timeout: 15000 });
   await page.getByRole('button', { name: /Voir les offres/ }).click();
-  check('profil enregistré (premiers pas masqués)', !(await page.getByText('Bienvenue sur AutoPostule').isVisible()));
+  check('profil enregistré (premiers pas masqués)', !(await page.getByText('Bienvenue sur Kareer').isVisible()));
 
   // Recherche
   await page.getByLabel('Métier ou mot-clé').fill('développeur');

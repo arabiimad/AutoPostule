@@ -21,7 +21,7 @@ interface JobDetailProps {
   /** Mobile : bouton retour vers la liste. */
   onBack?: () => void;
   busy?: boolean;
-  /** Lien direct vers cette offre dans AutoPostule (partage). */
+  /** Lien direct vers cette offre dans Kareer (partage). */
   shareUrl?: string;
 }
 
@@ -144,7 +144,7 @@ export const JobDetail: React.FC<JobDetailProps> = ({ job, match, userProfile, a
             {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Link2 className="h-3.5 w-3.5" />} {copied ? 'Lien copié' : 'Copier le lien'}
           </Button>
           {shareUrl && (
-            <Button variant="ghost" size="sm" onClick={share} title="Partager cette fiche (lien vers AutoPostule)">
+            <Button variant="ghost" size="sm" onClick={share} title="Partager cette fiche (lien vers Kareer)">
               {shared ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Share2 className="h-3.5 w-3.5" />} {shared ? 'Lien de la fiche copié' : 'Partager'}
             </Button>
           )}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ShieldCheck, Sparkles, XCircle, RotateCcw, Target, ScanSearch } from 'lucide-react';
 import { Badge, Button, Card, cx } from '../ui';
 import { BrandLoader } from '../BrandLoader';
@@ -56,6 +56,14 @@ export const ToolsView: React.FC<{ tool: ToolId; onToolChange: (t: ToolId) => vo
   const [ats, setAts] = useState<AtsResult | null>(null);
   const [match, setMatch] = useState<MatchResult | null>(null);
 
+  // Chargement puis résultat : amenés à l'écran (sur mobile, ils sont sous le formulaire)
+  const outputRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!busy && !ats && !match) return;
+    const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    outputRef.current?.scrollIntoView?.({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  }, [busy, ats, match]);
+
   const changeCv = (s: CvSource | null) => { setCv(s); setAts(null); setMatch(null); setError(null); };
 
   const runAts = async () => {
@@ -85,7 +93,7 @@ export const ToolsView: React.FC<{ tool: ToolId; onToolChange: (t: ToolId) => vo
           <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /> Gratuit, sans inscription
         </p>
         <h1 className="mt-3 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-          {tool === 'ats' ? 'Votre CV passe-t-il les logiciels de recrutement ?' : 'Votre CV correspond-il à cette offre ?'}
+          {tool === 'ats' ? 'Votre CV passe-t-il les logiciels de recrutement\u00a0?' : 'Votre CV correspond-il à cette offre\u00a0?'}
         </h1>
         <p className="mx-auto mt-2 max-w-xl text-[15px] text-slate-600">
           {tool === 'ats'
@@ -124,6 +132,7 @@ export const ToolsView: React.FC<{ tool: ToolId; onToolChange: (t: ToolId) => vo
         {error && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-sm text-rose-700">{error}</div>}
       </Card>
 
+      <div ref={outputRef} className="scroll-mt-20" aria-hidden="true" />
       {busy && <BrandLoader label={tool === 'ats' ? 'Lecture de votre CV comme un logiciel de recrutement…' : 'Comparaison de votre CV avec l’offre…'} />}
 
       {tool === 'ats' && ats && !busy && (

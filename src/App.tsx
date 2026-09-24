@@ -28,8 +28,8 @@ import { ToolsView } from './components/tools/ToolsView';
 
 const isPublicTool = (t: TabId) => t === 'ats' || t === 'match';
 const PUBLIC_TOOL_META: Record<'ats' | 'match', { title: string; description: string }> = {
-  ats: { title: 'Vérificateur de CV ATS gratuit — AutoPostule', description: 'Testez gratuitement et sans inscription si votre CV est lisible par les logiciels de recrutement (ATS) : texte, sections, coordonnées, mise en page.' },
-  match: { title: 'Comparer son CV à une offre d’emploi, gratuit — AutoPostule', description: 'Collez une offre et déposez votre CV : découvrez gratuitement les mots-clés de l’offre présents et absents de votre CV.' }
+  ats: { title: 'Vérificateur de CV ATS gratuit — Kareer', description: 'Testez gratuitement et sans inscription si votre CV est lisible par les logiciels de recrutement (ATS) : texte, sections, coordonnées, mise en page.' },
+  match: { title: 'Comparer son CV à une offre d’emploi, gratuit — Kareer', description: 'Collez une offre et déposez votre CV : découvrez gratuitement les mots-clés de l’offre présents et absents de votre CV.' }
 };
 import {
   FileCode2,
@@ -262,7 +262,7 @@ export default function App() {
   // Titre et description de page (partage, moteurs de recherche) pour les outils publics
   useEffect(() => {
     const meta = PUBLIC_TOOL_META[currentTab as 'ats' | 'match'];
-    const title = meta?.title || 'AutoPostule — Offres, CV sur mesure et suivi de candidatures';
+    const title = meta?.title || 'Kareer — Offres, CV sur mesure et suivi de candidatures';
     document.title = title;
     const desc = document.querySelector('meta[name="description"]');
     if (desc) {

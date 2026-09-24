@@ -204,7 +204,7 @@ export const KanbanCrmView: React.FC<KanbanCrmViewProps> = ({
             )}
             {onImport && (
               <>
-                <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()} title="Restaurer une sauvegarde AutoPostule (.json)">
+                <Button variant="ghost" size="sm" onClick={() => fileRef.current?.click()} title="Restaurer une sauvegarde Kareer (.json)">
                   <Upload className="h-3.5 w-3.5" /> Importer
                 </Button>
                 <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" aria-label="Fichier de sauvegarde" onChange={(e) => importBackup(e.target.files?.[0])} />

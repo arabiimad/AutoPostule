@@ -118,9 +118,9 @@ export function downloadFile(filename: string, content: string, mime: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Sauvegarde complète (JSON) : réimportable dans AutoPostule. */
+/** Sauvegarde complète (JSON) : réimportable dans Kareer. */
 export function applicationsBackup(apps: Application[]): string {
-  return JSON.stringify({ app: 'AutoPostule', version: 1, exportedAt: new Date().toISOString(), applications: apps }, null, 2);
+  return JSON.stringify({ app: 'Kareer', version: 1, exportedAt: new Date().toISOString(), applications: apps }, null, 2);
 }
 
 /** Lit une sauvegarde JSON ; renvoie les candidatures valides. */
