@@ -1,6 +1,8 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderCvHtml, generatePdfFromHtml, getSectorColor, escapeHtml } from '../server/pdf.ts';
+import { renderCvHtml, generatePdfFromHtml, getSectorColor, escapeHtml, isWebPdfAvailable, closeWebPdf } from '../server/pdf.ts';
+
+after(() => closeWebPdf());
 
 const candidate = {
   fullName: 'Sarah Benali <script>',
@@ -57,7 +59,8 @@ for (const template of ['article', 'moderncv', 'compact'] as const) {
   });
 }
 
-test('génération PDF Chromium Playwright', async () => {
+test('génération PDF Chromium Playwright (si Chromium est installé)', async (t) => {
+  if (!(await isWebPdfAvailable())) return t.skip('Chromium non installé (npx playwright install chromium)');
   const html = renderCvHtml(candidate, job, 'article');
   const pdf = await generatePdfFromHtml(html);
   assert.ok(pdf && pdf.length > 5000);

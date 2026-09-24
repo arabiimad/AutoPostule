@@ -62,9 +62,12 @@ L'IA ne produit jamais de LaTeX ; elle ne rédige que le contenu, qui est ensuit
 1. **Analyse de l'offre** (modèle rapide, résultat en cache 7 jours) : domaine, ton, exigences, missions, mots-clés.
 2. **Adaptation du contenu** (modèle le plus puissant) : titre, accroche, puces reformulées, ordre des expériences et des compétences, en JSON.
 3. **Garde-fous** : toute puce contenant un chiffre, un outil ou une compétence absents du profil est remplacée par le texte d'origine.
-4. **Mise en forme** : modèles LaTeX Classique, Moderne, Compact → le PDF compile toujours.
+4. **Relecture** : une seconde passe de l'IA compare chaque puce reformulée à l'original ; toute puce qui ajoute un fait revient au texte d'origine.
+5. **Mise en forme**, au choix dans le Studio :
+   - **Web** (par défaut) : mise en page HTML convertie en PDF par Chromium — aperçu instantané, aucun LaTeX requis. Installer le navigateur une fois : `npx playwright install chromium` (ou `PW_CHROMIUM_PATH` vers un Chromium existant ; `WEB_PDF=off` pour désactiver). Sans Chromium, le bouton PDF passe par l'impression du navigateur.
+   - **LaTeX** : modèles Classique, Moderne, Compact (pdfLaTeX, Tectonic ou Overleaf).
 
-Dans le Studio : onglet **Contenu** (retouche de chaque puce par l'IA avec des consignes, réordonnancement, masquage), **Aperçu** PDF intégré, changement de modèle sans perdre le contenu. `npm run check:ai` teste votre clé et affiche un CV adapté d'exemple.
+Dans le Studio : onglet **Contenu** (retouche de chaque puce par l'IA avec des consignes, réordonnancement, masquage), **Aperçu** intégré, changement de modèle sans perdre le contenu. `npm run check:ai` teste votre clé et affiche un CV adapté d'exemple.
 
 Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accès à l'API. Pour utiliser `gemini-3.1-pro-preview` via l'API, activez la facturation du projet Google Cloud lié à la clé (environ 2 $ / 12 $ par million de jetons en entrée / sortie, soit quelques centimes par CV). Sans facturation, l'application passe automatiquement sur Flash.
 
@@ -76,6 +79,7 @@ Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accè
 | `AUTH_MODE` | `off`, `optional` (défaut) ou `required` : vérification des comptes Firebase côté serveur |
 | `PORT` | Port d'écoute |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Facultatif : cache, limite de débit et quotas partagés entre plusieurs serveurs (Redis Upstash) |
+| `PDF_CONCURRENCY` | Nombre maximal de PDF Web générés en parallèle (3 par défaut) |
 | `LATEX_COMPILER` | `tectonic`, `pdflatex` ou `off` pour le bouton « Télécharger le PDF » |
 
 ## Fonctionnalités

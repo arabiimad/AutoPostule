@@ -48,3 +48,9 @@ test('rien n\'est inventé sur un texte illisible', () => {
   assert.deepEqual(p.languages, []);
   assert.equal(isParsedCvEmpty(p), true);
 });
+
+test('compétences du profil : telles qu’écrites, sans regroupement ni ajout (pas de « Kubernetes » pour « Docker »)', () => {
+  const cv = parseCvSemantically(`Karim Dupont\nDéveloppeur\nkarim@mail.fr\nCOMPÉTENCES\nReact, PostgreSQL, Git, Docker, Node.js`);
+  assert.deepEqual(cv.skills.filter((s) => /docker|kubernetes|postgres|données|git|ci\/cd|node/i.test(s)), ['PostgreSQL', 'Git', 'Docker', 'Node.js']);
+  assert.ok(!cv.skills.some((s) => s === 'Node'));
+});

@@ -10,6 +10,7 @@ import { searchRealJobs, hasRealSources, getSourceStatus } from "./server/jobSou
 import { generateFallbackLatex, normalizeTemplate, templateInstructions, compileLatex, detectLatexCompiler, TEMPLATES } from "./server/latex.ts";
 import { authMiddleware, getAuthMode } from "./server/auth.ts";
 import { extractTextFromDocx } from "./server/docx.ts";
+import { renderCvHtml, generatePdfFromHtml, isWebPdfAvailable, closeWebPdf } from "./server/pdf.ts";
 import { kv, countApiCall, getQuotaUsage } from "./server/store.ts";
 import { createHash } from "node:crypto";
 import {
@@ -337,12 +338,13 @@ async function startServer() {
 
   // Vérification du compte (AUTH_MODE) puis limite de débit : 30 appels IA / minute par compte ou par IP
   const PROTECTED = ["/api/cv", "/api/tailor", "/api/interview", "/api/latex/compile"];
+  // /api/cv/html et /api/cv/pdf : rendu sans IA → même limite large que /api/tailor/render
   app.use(PROTECTED, authMiddleware());
   // Mise en forme sans IA (/api/tailor/render) : appelée à chaque retouche, limite plus large
   const iaLimiter = createRateLimiter("ia", 30, 60_000);
   const renderLimiter = createRateLimiter("render", 150, 60_000);
   app.use(PROTECTED, (req: any, res: any, next: any) =>
-    (String(req.originalUrl).startsWith("/api/tailor/render") ? renderLimiter : iaLimiter)(req, res, next));
+    (/^\/api\/(tailor\/render|cv\/html|cv\/pdf)/.test(String(req.originalUrl)) ? renderLimiter : iaLimiter)(req, res, next));
   // Recherche d'offres : quotas des API partenaires (60/min pour La bonne alternance), résultats en cache
   app.use("/api/jobs", createRateLimiter("jobs", 40, 60_000));
   app.use("/api/client-errors", createRateLimiter("errors", 20, 60_000));
@@ -835,9 +837,39 @@ Renvoie uniquement un JSON : { "subject": "objet", "body": "texte de l'email sig
 
   // 4 ter. Compilation PDF locale (si pdflatex ou tectonic est installé sur la machine du serveur)
   app.get("/api/latex/templates", (req, res) => res.json({ templates: TEMPLATES }));
+  // Rendu « Web » du CV (HTML → PDF par Chromium) : ne nécessite pas LaTeX sur le serveur
+  const tailoredCandidate = (body: any) => {
+    const tailored = sanitizeTailored(body?.tailored);
+    return { candidate: tailored ? applyTailored(body?.candidate, tailored) : body?.candidate, tailored: !!tailored };
+  };
+  app.post("/api/cv/html", (req, res) => {
+    const { job, sector } = req.body || {};
+    const { candidate, tailored } = tailoredCandidate(req.body);
+    if (!hasItems(candidate?.experiences)) return res.status(400).json({ error: "PROFIL_INCOMPLET", message: "Ajoutez au moins une expérience à votre profil." });
+    const html = renderCvHtml(candidate, job, normalizeTemplate(req.body?.template), sector || job?.domain || job?.companySector, undefined, { tailored });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.send(html);
+  });
+  app.post("/api/cv/pdf", async (req, res) => {
+    const { job, sector } = req.body || {};
+    const { candidate, tailored } = tailoredCandidate(req.body);
+    if (!hasItems(candidate?.experiences)) return res.status(400).json({ error: "PROFIL_INCOMPLET", message: "Ajoutez au moins une expérience à votre profil." });
+    if (!(await isWebPdfAvailable())) return res.status(501).json({ error: "WEB_PDF_UNAVAILABLE", message: "Le moteur PDF (Chromium) n'est pas installé sur le serveur : utilisez le rendu LaTeX ou Overleaf." });
+    try {
+      const html = renderCvHtml(candidate, job, normalizeTemplate(req.body?.template), sector || job?.domain || job?.companySector, undefined, { tailored });
+      const pdf = await generatePdfFromHtml(html);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", 'inline; filename="cv.pdf"');
+      return res.send(pdf);
+    } catch (e: any) {
+      logEvent("error", "web_pdf_failed", { message: String(e?.message || e).slice(0, 300) });
+      return res.status(500).json({ error: "PDF_GENERATION_FAILED", message: "Génération du PDF impossible. Réessayez." });
+    }
+  });
+
   app.get("/api/latex/compiler", async (req, res) => {
-    const c = await detectLatexCompiler();
-    res.json({ available: !!c, compiler: c?.kind || null });
+    const [c, web] = await Promise.all([detectLatexCompiler(), isWebPdfAvailable()]);
+    res.json({ available: !!c, compiler: c?.kind || null, web });
   });
   app.post("/api/latex/compile", async (req, res) => {
     const tex = String(req.body?.latexCode || "");
@@ -980,10 +1012,24 @@ Analyse avec la méthode STAR. Renvoie uniquement un JSON valide :
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     logEvent("info", "server_started", { port: PORT, mode: isProduction ? "production" : "development", storage: kv().kind, sources: getSourceStatus() });
   });
+
+  // Arrêt propre (déploiement, Ctrl+C) : ferme Chromium et les connexions, puis quitte
+  let stopping = false;
+  const shutdown = (signal: string) => {
+    if (stopping) return;
+    stopping = true;
+    logEvent("info", "server_stopping", { signal });
+    setTimeout(() => process.exit(0), 5000).unref();
+    httpServer.close();
+    httpServer.closeAllConnections?.();
+    closeWebPdf().catch(() => {}).finally(() => process.exit(0));
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 startServer();

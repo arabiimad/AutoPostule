@@ -15,6 +15,7 @@ import { startMockSources } from './mock-sources.mjs';
 import { e2eServerEnv, MOCK_PORT, APP_PORT } from './env.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const outDir = process.env.E2E_OUT_DIR || (await import('node:os')).tmpdir();
 if (!fs.existsSync(path.join(root, 'dist', 'server.cjs'))) {
   console.error('dist/server.cjs introuvable : lancez d’abord « npm run build ».');
   process.exit(1);
@@ -163,17 +164,18 @@ try {
   await page.getByRole('button', { name: /Compact/ }).first().click();
   await page.waitForTimeout(1200);
   check('changement de modèle sans perdre le contenu', (await page.getByLabel('Code source LaTeX du CV').inputValue()).includes('10pt') && (await page.getByLabel('Code source LaTeX du CV').inputValue()).includes('Titre modifié e2e'));
-  if (/pdflatex|tectonic/.test(serverLog) || await page.getByRole('tab', { name: 'Aperçu' }).count()) {
-    await page.getByRole('tab', { name: 'Aperçu' }).click();
-    await page.waitForSelector('iframe[title="Aperçu du CV (PDF)"]', { timeout: 30000 }).catch(() => null);
-    check('aperçu PDF intégré', (await page.locator('iframe[title="Aperçu du CV (PDF)"]').count()) === 1);
-  }
+  await page.getByRole('tab', { name: 'Aperçu' }).click();
+  await page.waitForSelector('iframe[title="Aperçu du CV"]', { timeout: 30000 }).catch(() => null);
+  const webFrame = page.frameLocator('iframe[title="Aperçu du CV"]');
+  const webText = await webFrame.locator('body').textContent({ timeout: 10000 }).catch(() => '');
+  check('aperçu Web intégré (contenu adapté)', /Titre modifié e2e/.test(webText || ''), (webText || '').slice(0, 80));
+  await page.screenshot({ path: path.join(outDir, 'studio-apercu-web.png') }).catch(() => null);
   const [dl] = await Promise.all([
     page.waitForEvent('download', { timeout: 30000 }),
     page.getByRole('button', { name: /PDF/ }).first().click()
   ]).catch(() => [null]);
   const pdfOk = dl ? fs.readFileSync(await dl.path()).subarray(0, 4).toString() === '%PDF' : false;
-  check('PDF compilé (si LaTeX installé sur la machine)', pdfOk || !/pdflatex|tectonic/.test(serverLog), dl ? '' : 'aucun téléchargement');
+  check('PDF Web téléchargé (Chromium)', pdfOk, dl ? '' : 'aucun téléchargement');
   await page.getByRole('button', { name: 'Valider et postuler' }).click();
   await page.waitForTimeout(800);
   body = await page.textContent('body');

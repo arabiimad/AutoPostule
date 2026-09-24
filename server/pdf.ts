@@ -2,7 +2,7 @@
  * Moteur de rendu PDF haute fidélité basé sur Playwright Chromium.
  * Génère des documents A4 vectoriels élégants et conformes aux maquettes Connektica.
  */
-import { chromium, type Browser } from "playwright";
+import type { Browser } from "playwright";
 import { candidateHasSkill } from "../src/utils/skillMatcher.ts";
 import type { CvTemplate } from "../src/types.ts";
 
@@ -10,8 +10,16 @@ let browserInstance: Browser | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.isConnected()) {
+    // Import à la demande : le serveur démarre même si Playwright / Chromium ne sont pas installés
+    const { chromium } = await import("playwright");
     browserInstance = await chromium.launch({
       headless: true,
+      // l'arrêt du serveur ferme le navigateur (voir server.ts) : pas de gestionnaires de signaux Playwright
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
+      // Chromium déjà installé (image Docker, CI) : chemin explicite
+      executablePath: process.env.PW_CHROMIUM_PATH || undefined,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
     });
   }
@@ -49,13 +57,38 @@ export function getSectorColor(sector?: string, customColor?: string): { hex: st
   return { hex: "#3c963c", lightHex: "#f0fdf4" };
 }
 
-export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "article", sector?: string, customColor?: string): string {
+/** Ferme Chromium (tests, arrêt du serveur). */
+export async function closeWebPdf(): Promise<void> {
+  const b = browserInstance;
+  browserInstance = null;
+  if (b) await b.close().catch(() => {});
+}
+
+/** Chromium est-il utilisable sur ce serveur ? (résultat mis en cache) */
+let webPdfProbe: Promise<boolean> | null = null;
+export function isWebPdfAvailable(): Promise<boolean> {
+  if (process.env.WEB_PDF === "off") return Promise.resolve(false);
+  webPdfProbe ||= getBrowser().then(() => true, () => false);
+  return webPdfProbe;
+}
+
+export function renderCvHtml(
+  candidate: any,
+  job: any,
+  template: CvTemplate = "article",
+  sector?: string,
+  customColor?: string,
+  options: { tailored?: boolean } = {}
+): string {
   const ownSkills: string[] = hasItems(candidate?.skills) ? candidate.skills : [];
   const requirements: string[] = Array.isArray(job?.skillsRequired) ? job.skillsRequired : [];
   const relevant = (skill: string) => requirements.some((req) => candidateHasSkill([skill], req));
 
   const name = clean(candidate?.fullName) || "Candidat";
-  const title = clean(job?.title) || clean(candidate?.title) || "Professionnel";
+  // Contenu adapté : titre et ordre des compétences choisis pour ce CV
+  const title = options.tailored
+    ? clean(candidate?.title) || "Professionnel"
+    : clean(String(job?.title || "").replace(/^Candidature spontanée — /, "")) || clean(candidate?.title) || "Professionnel";
   const summary = clean(candidate?.summary);
 
   const contacts = [candidate?.email, candidate?.phone, candidate?.location].map(clean).filter(Boolean);
@@ -82,8 +115,12 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
     institution: clean(e.institution)
   }));
 
-  const sortedSkills = Array.from(new Set([...ownSkills.filter(relevant), ...ownSkills.filter((s) => !relevant(s))]));
+  const sortedSkills = options.tailored ? ownSkills : Array.from(new Set([...ownSkills.filter(relevant), ...ownSkills.filter((s) => !relevant(s))]));
   const languages: string[] = hasItems(candidate?.languages) ? candidate.languages.map(clean).filter(Boolean) : [];
+  const projects = (hasItems(candidate?.projects) ? candidate.projects : [])
+    .filter((p: any) => clean(p?.name))
+    .slice(0, 4)
+    .map((p: any) => ({ name: clean(p.name), description: clean(p.description), tech: (Array.isArray(p.technologies) ? p.technologies : []).map(clean).filter(Boolean).join(", ") }));
 
   const detectedSector = sector || job?.domain || job?.companySector;
   const colors = getSectorColor(detectedSector, customColor);
@@ -120,6 +157,10 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
       width: 100%;
       max-width: 100%;
       margin: 0 auto;
+    }
+    /* À l'écran (aperçu), mêmes marges que la page imprimée */
+    @media screen {
+      .cv-container { padding: ${isCompact ? "10mm 12mm" : "14mm 16mm"}; }
     }
     /* Header */
     .header {
@@ -338,14 +379,14 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
     ${experiences.length > 0 ? `
     <section class="section">
       <h2 class="section-title">Expériences professionnelles</h2>
-      ${experiences.map((exp) => isModern ? `
+      ${experiences.map((exp: any) => isModern ? `
         <div class="exp-item">
           <div class="exp-meta">${escapeHtml(exp.dates)}</div>
           <div>
             <div class="exp-role-company">${escapeHtml(exp.role)} <span class="exp-company">— ${escapeHtml(exp.company)}</span>${exp.location ? ` <span style="font-weight:normal;color:#64748b;">(${escapeHtml(exp.location)})</span>` : ""}</div>
             ${exp.bullets.length > 0 ? `
               <ul class="exp-bullets">
-                ${exp.bullets.map((b) => `<li class="exp-bullet">${b.bold ? `<strong>${escapeHtml(b.bold)} :</strong> ` : ""}${escapeHtml(b.text)}</li>`).join("")}
+                ${exp.bullets.map((b: any) => `<li class="exp-bullet">${b.bold ? `<strong>${escapeHtml(b.bold)} :</strong> ` : ""}${escapeHtml(b.text)}</li>`).join("")}
               </ul>
             ` : ""}
           </div>
@@ -358,7 +399,7 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
           </div>
           ${exp.bullets.length > 0 ? `
             <ul class="exp-bullets">
-              ${exp.bullets.map((b) => `<li class="exp-bullet">${b.bold ? `<strong>${escapeHtml(b.bold)} :</strong> ` : ""}${escapeHtml(b.text)}</li>`).join("")}
+              ${exp.bullets.map((b: any) => `<li class="exp-bullet">${b.bold ? `<strong>${escapeHtml(b.bold)} :</strong> ` : ""}${escapeHtml(b.text)}</li>`).join("")}
             </ul>
           ` : ""}
         </div>
@@ -371,7 +412,7 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
     <section class="section">
       <h2 class="section-title">Formation & Diplômes</h2>
       <div class="edu-list">
-        ${education.map((e) => isModern ? `
+        ${education.map((e: any) => isModern ? `
           <div class="edu-item">
             <div class="edu-year">${escapeHtml(e.year)}</div>
             <div><span class="edu-title">${escapeHtml(e.degree)}</span> — <span class="edu-school">${escapeHtml(e.institution)}</span></div>
@@ -399,6 +440,16 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
     </section>
     ` : ""}
 
+    <!-- Projets -->
+    ${projects.length > 0 ? `
+    <section class="section">
+      <h2 class="section-title">Projets</h2>
+      <ul class="exp-bullets">
+        ${projects.map((p: any) => `<li class="exp-bullet"><strong>${escapeHtml(p.name)}</strong>${p.description ? ` — ${escapeHtml(p.description)}` : ""}${p.tech ? ` <span style="color:#64748b">(${escapeHtml(p.tech)})</span>` : ""}</li>`).join("")}
+      </ul>
+    </section>
+    ` : ""}
+
     <!-- Langues -->
     ${languages.length > 0 ? `
     <section class="section">
@@ -416,14 +467,34 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
 /**
  * Génère un Buffer PDF A4 à partir du code HTML fourni.
  */
-export async function generatePdfFromHtml(html: string): Promise<Buffer> {
+// Au plus N rendus simultanés : chaque page Chromium coûte ~50-100 Mo de mémoire
+const MAX_PDF_CONCURRENCY = Math.max(1, Number(process.env.PDF_CONCURRENCY) || 3);
+let activeRenders = 0;
+const renderQueue: Array<() => void> = [];
+
+async function withRenderSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeRenders >= MAX_PDF_CONCURRENCY) await new Promise<void>((resolve) => renderQueue.push(resolve));
+  activeRenders++;
+  try {
+    return await fn();
+  } finally {
+    activeRenders--;
+    renderQueue.shift()?.();
+  }
+}
+
+export function generatePdfFromHtml(html: string): Promise<Buffer> {
+  return withRenderSlot(() => renderPdf(html));
+}
+
+async function renderPdf(html: string): Promise<Buffer> {
   const browser = await getBrowser();
   const context = await browser.newContext();
   const page = await context.newPage();
   try {
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 20000 });
     // Donnez un bref instant pour le calcul de mise en page
-    await page.evaluate(() => document.fonts ? document.fonts.ready : Promise.resolve());
+    await page.evaluate(async () => { if (document.fonts) await document.fonts.ready; });
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,

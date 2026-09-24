@@ -85,6 +85,13 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
 }) => {
   const [template, setTemplate] = useState<CvTemplate>(normalizeTemplate(initialTemplate ?? userProfile.preferredTemplate));
   const [compilerAvailable, setCompilerAvailable] = useState(false);
+  // Moteur de rendu : « web » (HTML → PDF par Chromium, sans LaTeX) ou « latex » (pdfLaTeX / Tectonic / Overleaf)
+  const [webPdfAvailable, setWebPdfAvailable] = useState(false);
+  const [engine, setEngine] = useState<'web' | 'latex'>(() => {
+    try { return localStorage.getItem('autopostule_cv_engine') === 'latex' ? 'latex' : 'web'; } catch { return 'web'; }
+  });
+  const [webHtml, setWebHtml] = useState<string>('');
+  const webFrameRef = React.useRef<HTMLIFrameElement>(null);
   const [isCompiling, setIsCompiling] = useState(false);
   // Aucune donnée de repli : le studio n'utilise que le profil de l'utilisateur connecté.
   const computedMatch = calculateCandidateMatch(userProfile.skills, job?.skillsRequired || []);
@@ -123,13 +130,48 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
     let alive = true;
     apiFetch('/api/latex/compiler')
       .then(r => r.json())
-      .then(d => { if (alive) setCompilerAvailable(!!d?.available); })
+      .then(d => { if (alive) { setCompilerAvailable(!!d?.available); setWebPdfAvailable(!!d?.web); } })
       .catch(() => {});
     return () => { alive = false; };
   }, []);
 
-  /** Compile le code LaTeX sur le serveur et renvoie le PDF. */
+  const changeEngine = (e: 'web' | 'latex') => {
+    setEngine(e);
+    try { localStorage.setItem('autopostule_cv_engine', e); } catch { /* ignore */ }
+  };
+  const renderPayload = () => ({ candidate: userProfile, job, template, tailored: tailored || undefined, sector: analysis?.domain || undefined });
+
+  // Aperçu Web : HTML identique au PDF, instantané (sans IA ni compilation)
+  React.useEffect(() => {
+    if (engine !== 'web' || activeTab !== 'preview' || !job) return;
+    let alive = true;
+    const t = setTimeout(async () => {
+      try {
+        const res = await apiFetch('/api/cv/html', renderPayload());
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          throw new Error(data?.message || `Aperçu impossible (${res.status}).`);
+        }
+        const html = await res.text();
+        if (alive) { setWebHtml(html); setPreviewError(null); }
+      } catch (e: any) {
+        if (alive) setPreviewError(e?.message || 'Aperçu impossible.');
+      }
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, activeTab, tailored, template, analysis]);
+
+  /** PDF du CV : moteur Web (Chromium) ou compilation LaTeX. */
   const fetchPdf = async (code: string): Promise<Blob> => {
+    if (engine === 'web') {
+      const res = await apiFetch('/api/cv/pdf', renderPayload());
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.message || `Génération du PDF impossible (${res.status}).`);
+      }
+      return res.blob();
+    }
     const res = await apiFetch('/api/latex/compile', { latexCode: code });
     if (!res.ok) {
       const data = await res.json().catch(() => null);
@@ -157,9 +199,9 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
   React.useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl.split('#')[0]); }, [previewUrl]);
   // Aperçu compilé automatiquement à l'ouverture de l'onglet (et quand le CV a changé)
   React.useEffect(() => {
-    if (activeTab === 'preview' && compilerAvailable && latexCode && latexCode !== previewedCode && !isCompiling && !isRendering) refreshPreview();
+    if (engine === 'latex' && activeTab === 'preview' && compilerAvailable && latexCode && latexCode !== previewedCode && !isCompiling && !isRendering) refreshPreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, compilerAvailable, latexCode, isRendering]);
+  }, [engine, activeTab, compilerAvailable, latexCode, isRendering]);
 
   // Contenu modifié → nouveau code LaTeX (modèle, sans IA), avec un court délai
   const renderTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -188,7 +230,13 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
   };
 
   const handleCompilePdf = async () => {
-    if (!latexCode) return;
+    if (!latexCode && engine === 'latex') return;
+    // Web sans Chromium sur le serveur : impression du navigateur (« Enregistrer en PDF »)
+    if (engine === 'web' && !webPdfAvailable) {
+      setActiveTab('preview');
+      setTimeout(() => webFrameRef.current?.contentWindow?.print(), 400);
+      return;
+    }
     setIsCompiling(true);
     setErrorMessage(null);
     try {
@@ -356,14 +404,14 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
 
   const tabs: { id: StudioTab; label: React.ReactNode }[] = [
     ...(tailored ? [{ id: 'content' as StudioTab, label: 'Contenu' }] : []),
-    ...(compilerAvailable ? [{ id: 'preview' as StudioTab, label: 'Aperçu' }] : []),
+    ...(engine === 'web' || compilerAvailable ? [{ id: 'preview' as StudioTab, label: 'Aperçu' }] : []),
     { id: 'latex', label: 'Code LaTeX' },
     { id: 'letter', label: 'Lettre de motivation' },
     { id: 'ats', label: 'Compétences' },
     ...(hasHistory ? [{ id: 'history' as StudioTab, label: `Historique (${history.length})` }] : [])
   ];
   const currentTab: StudioTab =
-    (activeTab === 'history' && !hasHistory) || (activeTab === 'content' && !tailored) || (activeTab === 'preview' && !compilerAvailable) ? 'latex' : activeTab;
+    (activeTab === 'history' && !hasHistory) || (activeTab === 'content' && !tailored) || (activeTab === 'preview' && engine === 'latex' && !compilerAvailable) ? 'latex' : activeTab;
 
   const scoreTone = matchScore === null ? 'neutral' : matchScore >= 70 ? 'green' : matchScore >= 40 ? 'amber' : 'neutral';
 
@@ -426,8 +474,17 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
             <RefreshCw className={cx('h-3.5 w-3.5', isGenerating && 'animate-spin')} aria-hidden="true" />
             {isGenerating ? 'Génération…' : 'Régénérer avec l’IA'}
           </Button>
-          {compilerAvailable && (
-            <Button size="sm" variant="secondary" onClick={handleCompilePdf} disabled={!latexCode || isCompiling} title="Compile le CV sur le serveur et télécharge le PDF">
+          <div role="group" aria-label="Moteur de rendu" className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-0.5">
+            {([['web', 'Web'], ['latex', 'LaTeX']] as const).map(([id, label]) => (
+              <button key={id} type="button" onClick={() => changeEngine(id)} aria-pressed={engine === id}
+                title={id === 'web' ? 'Mise en page moderne, PDF sans LaTeX' : 'Modèles LaTeX (pdfLaTeX, Tectonic ou Overleaf)'}
+                className={cx('rounded-lg px-2.5 py-1 text-xs font-medium', engine === id ? 'bg-white text-brand-700 shadow-sm ring-1 ring-slate-200' : 'text-slate-600 hover:text-slate-900')}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {(engine === 'web' || compilerAvailable) && (
+            <Button size="sm" variant="secondary" onClick={handleCompilePdf} disabled={(engine === 'latex' && !latexCode) || isCompiling} title="Télécharger le CV en PDF">
               <Download className="h-3.5 w-3.5" aria-hidden="true" />
               {isCompiling ? 'Compilation…' : 'PDF'}
             </Button>
@@ -464,7 +521,22 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
         )}
 
         {/* Aperçu PDF */}
-        {currentTab === 'preview' && (
+        {currentTab === 'preview' && engine === 'web' && (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-500">Aperçu identique au PDF (format A4). Les couleurs s’adaptent au secteur de l’offre.</p>
+            {previewError ? (
+              <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">{previewError}</div>
+            ) : webHtml ? (
+              <div className="overflow-auto rounded-xl border border-slate-200 bg-slate-100 p-3 sm:p-6">
+                <iframe ref={webFrameRef} title="Aperçu du CV" srcDoc={webHtml} sandbox="allow-same-origin allow-modals"
+                  className={cx('mx-auto block h-[1123px] w-[794px] max-w-full origin-top rounded bg-white shadow-lg', isRendering && 'opacity-60')} />
+              </div>
+            ) : (
+              <div className="flex h-64 items-center justify-center rounded-xl border border-dashed border-slate-300 text-sm text-slate-500" role="status">Préparation de l’aperçu…</div>
+            )}
+          </div>
+        )}
+        {currentTab === 'preview' && engine === 'latex' && (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs text-slate-500">Rendu réel du CV (compilé par pdfLaTeX / Tectonic sur le serveur).</p>

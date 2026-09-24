@@ -63,6 +63,7 @@ interface CvData {
   education: { year: string; degree: string; institution: string }[];
   skills: string[];
   languages: string[];
+  projects: { name: string; description: string; tech: string }[];
 }
 
 function buildData(candidate: any, job: any, tailored = false): CvData {
@@ -99,7 +100,15 @@ function buildData(candidate: any, job: any, tailored = false): CvData {
     })),
     // Compétences demandées par l'offre ET possédées d'abord, puis le reste du profil
     skills: (tailored ? ownSkills : Array.from(new Set([...match.matchedKeywords, ...ownSkills]))).map(escapeLatex),
-    languages: (hasItems(candidate?.languages) ? candidate.languages : []).map(clean).filter(Boolean).map(escapeLatex)
+    languages: (hasItems(candidate?.languages) ? candidate.languages : []).map(clean).filter(Boolean).map(escapeLatex),
+    projects: (hasItems(candidate?.projects) ? candidate.projects : [])
+      .filter((p: any) => clean(p?.name))
+      .slice(0, 4)
+      .map((p: any) => ({
+        name: escapeLatex(clean(p.name)),
+        description: escapeLatex(clean(p.description)),
+        tech: (Array.isArray(p.technologies) ? p.technologies : []).map(clean).filter(Boolean).map(escapeLatex).join(", ")
+      }))
   };
 }
 
@@ -125,6 +134,9 @@ function renderArticle(d: CvData, compact = false): string {
   if (exp) sections.push(`\\section*{EXPÉRIENCES PROFESSIONNELLES}\n${exp}`);
   if (d.skills.length) sections.push(`\\section*{COMPÉTENCES}\n${d.skills.join(" \\textbullet{} ")}`);
   if (edu) sections.push(`\\section*{FORMATIONS}\n\\begin{itemize}${itemSep}\n${edu}\n\\end{itemize}`);
+  if (d.projects.length) {
+    sections.push(`\\section*{PROJETS}\n\\begin{itemize}${itemSep}\n${d.projects.map((p) => `    \\item \\textbf{${p.name}}${p.description ? ` -- ${p.description}` : ""}${p.tech ? ` \\textit{(${p.tech})}` : ""}`).join("\n")}\n\\end{itemize}`);
+  }
   if (d.languages.length) sections.push(`\\section*{LANGUES}\n${d.languages.join(" \\hfill ")}`);
 
   const color = compact ? "{RGB}{40, 40, 40}" : "{RGB}{30, 80, 160}";
@@ -185,6 +197,7 @@ function renderModernCv(d: CvData): string {
   if (exp) sections.push(`\\section{Expériences professionnelles}\n${exp}`);
   if (d.skills.length) sections.push(`\\section{Compétences}\n\\cvitem{}{${d.skills.join(", ")}}`);
   if (edu) sections.push(`\\section{Formations}\n${edu}`);
+  if (d.projects.length) sections.push(`\\section{Projets}\n${d.projects.map((p) => `\\cvitem{${p.name}}{${p.description}${p.tech ? ` \\textit{(${p.tech})}` : ""}}`).join("\n")}`);
   if (d.languages.length) sections.push(`\\section{Langues}\n${d.languages.map((l) => `\\cvitem{}{${l}}`).join("\n")}`);
 
   return `\\documentclass[11pt,a4paper,sans]{moderncv}
