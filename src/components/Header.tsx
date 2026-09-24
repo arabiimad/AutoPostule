@@ -24,6 +24,8 @@ interface HeaderProps {
   alertsNewCount?: number;
   /** Forfait actuel (null : inconnu). */
   plan?: 'free' | 'premium' | null;
+  /** Onglets affichés (visiteur : recherche et Studio). Par défaut : tous. */
+  visibleTabs?: TabId[];
 }
 
 const THEME_CYCLE: ThemePref[] = ['system', 'light', 'dark'];
@@ -69,8 +71,10 @@ export const Header: React.FC<HeaderProps> = ({
   followUpDueCount = 0,
   applicationsCount = 0,
   alertsNewCount = 0,
-  plan = null
+  plan = null,
+  visibleTabs
 }) => {
+  const tabs = visibleTabs ? TABS.filter((t) => visibleTabs.includes(t.id)) : TABS;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -114,7 +118,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           <nav className="hidden lg:flex items-center h-full" aria-label="Navigation principale">
-            {TABS.map(({ id, label, icon: Icon }) => {
+            {tabs.map(({ id, label, icon: Icon }) => {
               const active = currentTab === id;
               return (
                 <button
@@ -222,8 +226,8 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Barre d'onglets mobile (bas d'écran) */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur pb-[env(safe-area-inset-bottom)]" aria-label="Navigation">
-        <div className="grid grid-cols-6">
-          {TABS.map(({ id, short, icon: Icon }) => {
+        <div className="grid" style={{ gridTemplateColumns: `repeat(${tabs.length + (visibleTabs ? 1 : 0)}, minmax(0, 1fr))` }}>
+          {tabs.map(({ id, short, icon: Icon }) => {
             const active = currentTab === id;
             return (
               <button key={id} onClick={() => setCurrentTab(id)} aria-current={active ? 'page' : undefined}
@@ -235,6 +239,12 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             );
           })}
+          {visibleTabs && (
+            <button onClick={() => onOpenAuthModal('register')} className="flex flex-col items-center gap-0.5 py-2 text-[10.5px] font-medium text-brand-700">
+              <UserRound className="h-5 w-5" />
+              Créer un compte
+            </button>
+          )}
         </div>
       </nav>
     </>

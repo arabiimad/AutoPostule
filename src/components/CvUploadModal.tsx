@@ -830,7 +830,7 @@ export const CvUploadModal: React.FC<CvUploadModalProps> = ({
             <div className="space-y-1.5">
               <h3 className="text-lg font-semibold text-slate-900">Profil enregistré</h3>
               <p className="mx-auto max-w-md text-sm leading-relaxed text-slate-600">
-                Vos compétences et votre parcours réels servent désormais au calcul de compatibilité avec les offres et à la génération de vos CV.
+                Vos compétences et votre parcours réels servent désormais à évaluer votre adéquation avec les offres et à la génération de vos CV.
               </p>
             </div>
             {(extractedProfile.fullName || extractedProfile.title) && (

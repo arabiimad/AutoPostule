@@ -7,6 +7,7 @@ import { assessFit, type JobFit } from '../../utils/skillMatcher';
 import { filterJobs } from '../../utils/jobFilter';
 import { ageInDays, sourceShortName } from '../../utils/format';
 import { Button, EmptyState, cx } from '../ui';
+import { accountsRequired } from '../../data/cloud';
 import { JobCard, JobCardSkeleton } from './JobCard';
 import { JobDetail } from './JobDetail';
 
@@ -343,7 +344,9 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
           </div>
           <ol className="mt-4 grid gap-3 sm:grid-cols-3">
             {[
-              { n: 1, title: 'Importez votre CV', text: 'PDF, Word ou image : vos compétences et expériences sont extraites.', action: onOpenCvUpload && <Button variant="primary" size="sm" onClick={onOpenCvUpload}><Upload className="h-3.5 w-3.5" /> Importer</Button> },
+              accountsRequired && !signedIn
+                ? { n: 1, title: 'Créez votre compte gratuit', text: 'Puis importez votre CV (PDF, Word ou image) : vos compétences et expériences sont extraites.', action: onOpenAuthModal && <Button variant="primary" size="sm" onClick={() => onOpenAuthModal('register')}>Créer un compte</Button> }
+                : { n: 1, title: 'Importez votre CV', text: 'PDF, Word ou image : vos compétences et expériences sont extraites.', action: onOpenCvUpload && <Button variant="primary" size="sm" onClick={onOpenCvUpload}><Upload className="h-3.5 w-3.5" /> Importer</Button> },
               { n: 2, title: 'Trouvez des offres', text: 'France Travail, La bonne alternance, LinkedIn, Indeed… réunis et triés selon votre profil.' },
               { n: 3, title: 'Préparez chaque dossier', text: 'CV LaTeX et lettre adaptés à l’offre, puis suivi, relances et entretiens.', icon: FileText }
             ].map(step => (

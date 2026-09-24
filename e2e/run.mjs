@@ -1,7 +1,7 @@
 /**
  * Tests de bout en bout (navigateur réel, sources d'offres simulées).
  *
- *   npm run build            # construit dist/ (interface + serveur)
+ *   VITE_SUPABASE_URL= VITE_SUPABASE_ANON_KEY= npm run build   # dist/ en mode local (sans comptes en ligne)
  *   npx playwright install chromium   # une seule fois
  *   npm run test:e2e
  *

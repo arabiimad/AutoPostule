@@ -69,6 +69,28 @@ try {
   await page.goto(BASE);
   await page.waitForTimeout(1000);
 
+  // Visiteur (sans compte) : recherche libre, fonctions personnelles réservées aux comptes, aucune session locale
+  const navText = await page.locator('header nav').first().textContent();
+  check('visiteur : onglets Offres et Studio seulement', /Offres/.test(navText) && !/Candidatures|Entretiens|Profil|Assistant/.test(navText), navText);
+  await page.getByLabel('Métier ou mot-clé').fill('développeur');
+  await page.getByLabel('Lieu', { exact: true }).fill('Avignon');
+  await page.getByLabel('Lieu', { exact: true }).press('Enter');
+  await page.waitForTimeout(1500);
+  const visitorText = await page.textContent('main');
+  check('visiteur : offres visibles, sans adéquation', /Front-End React/.test(visitorText) && !/Adéquation (forte|moyenne|faible)/.test(visitorText));
+  await page.locator('article', { hasText: 'Front-End React' }).locator('button[aria-label^="Sauvegarder"]').click();
+  const dialog = page.getByRole('dialog');
+  const dialogText = await dialog.textContent({ timeout: 5000 }).catch(() => '');
+  check('visiteur : « Sauvegarder » ouvre la création de compte avec la raison', /Créer votre compte/.test(dialogText) && /sauvegarder des offres/.test(dialogText), dialogText.slice(0, 200));
+  check('visiteur : aucune option « session locale »', !/session locale/i.test(dialogText));
+  await page.keyboard.press('Escape');
+  await page.goto(`${BASE}/?onglet=candidatures`);
+  await page.waitForTimeout(800);
+  const gateText = await page.textContent('main');
+  check('visiteur : Candidatures → page d’invitation (aucune donnée)', /Suivi des candidatures/.test(gateText) && /Créer un compte gratuit/.test(gateText), gateText.slice(0, 200));
+  await page.goto(BASE);
+  await page.waitForTimeout(1000);
+
   // Connexion par e-mail
   await page.getByRole('button', { name: 'Connexion', exact: true }).click();
   await page.getByLabel('Adresse e-mail').fill(users[0].email);

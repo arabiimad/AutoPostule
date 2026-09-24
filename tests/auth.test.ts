@@ -17,9 +17,10 @@ before(async () => {
 });
 after(() => server.close());
 
-function run(mode: string, authorization?: string) {
-  process.env.AUTH_MODE = mode;
-  const mw = authMiddleware();
+function run(mode: string, authorization?: string, options: { optional?: boolean } = {}) {
+  if (mode) process.env.AUTH_MODE = mode;
+  else delete process.env.AUTH_MODE;
+  const mw = authMiddleware(options);
   return new Promise<{ next: boolean; status?: number; uid?: string }>((resolve) => {
     const req: any = { headers: authorization ? { authorization } : {} };
     const res: any = { status: (s: number) => ({ json: () => resolve({ next: false, status: s }) }) };
@@ -45,4 +46,13 @@ test('jeton invalide refusé (401), même en mode optional', async () => {
 
 test('mode off : aucune vérification', async () => {
   assert.equal((await run('off', 'Bearer x')).next, true);
+});
+
+test('sans AUTH_MODE et avec Supabase configuré : compte exigé (production)', async () => {
+  assert.equal((await run('')).status, 401);
+});
+
+test('routes ouvertes aux visiteurs (forfaits) : acceptées sans jeton même en mode required', async () => {
+  assert.deepEqual(await run('required', undefined, { optional: true }), { next: true, uid: undefined });
+  assert.deepEqual(await run('required', 'Bearer bon-jeton', { optional: true }), { next: true, uid: 'user-123' });
 });

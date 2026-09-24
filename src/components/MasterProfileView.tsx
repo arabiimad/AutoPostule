@@ -115,7 +115,7 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
       {/* En-tête */}
       <PageHeader
         title="Mon profil"
-        subtitle="La base de vos candidatures : le score de compatibilité, les CV et les lettres n’utilisent que ce qui est écrit ici."
+        subtitle="La base de vos candidatures : l’adéquation avec les offres, les CV et les lettres n’utilisent que ce qui est écrit ici."
         actions={
           <>
             {onOpenCvUpload && (
@@ -253,7 +253,7 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
                 Compétences ({profile.skills.length})
               </h2>
               <p className="mt-1 text-xs text-slate-500">
-                Elles servent au calcul de compatibilité et sont mises en avant dans vos CV. N'ajoutez que des compétences réelles.
+                Elles servent à évaluer votre adéquation avec les offres et sont mises en avant dans vos CV. N'ajoutez que des compétences réelles.
               </p>
             </div>
 

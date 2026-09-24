@@ -27,7 +27,7 @@ export function createApp(): Express {
   // /api/cv/html et /api/cv/pdf : rendu sans IA → même limite large que /api/tailor/render
   app.use(PROTECTED, authMiddleware());
   // Compte et abonnement : identification seulement (pas de limite IA)
-  app.use(["/api/account", "/api/billing/checkout", "/api/billing/portal"], authMiddleware());
+  app.use(["/api/account", "/api/billing/checkout", "/api/billing/portal"], authMiddleware({ optional: true }));
   app.use(["/api/account", "/api/billing"], createRateLimiter("account", 60, 60_000));
   // Mise en forme sans IA (/api/tailor/render) : appelée à chaque retouche, limite plus large
   const iaLimiter = createRateLimiter("ia", 30, 60_000);
