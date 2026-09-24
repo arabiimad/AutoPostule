@@ -64,14 +64,14 @@ Run 'Demarrage de test (30 s, port 3099)' {
   $ok = $false
   for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Seconds 1
-    try { Invoke-WebRequest -UseBasicParsing http://localhost:3099/api/health -TimeoutSec 2 | Out-Null; $ok = $true; break } catch {}
+    try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3099/api/health -TimeoutSec 5 | Out-Null; $ok = $true; break } catch {}
   }
   "api/health repond : $ok"
   if ($ok) {
     try {
-      $h = Invoke-WebRequest -UseBasicParsing http://localhost:3099/ -TimeoutSec 30
+      $h = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3099/ -TimeoutSec 30
       "page d'accueil : $($h.StatusCode) ; Kareer dans la page : $($h.Content -match 'Kareer')"
-      $t = Invoke-WebRequest -UseBasicParsing http://localhost:3099/src/main.tsx -TimeoutSec 60
+      $t = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:3099/src/main.tsx -TimeoutSec 60
       "script de l'application : $($t.StatusCode)"
     } catch { "page : ERREUR $_" }
   }

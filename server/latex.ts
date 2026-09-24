@@ -550,13 +550,22 @@ export function templateInstructions(template: CvTemplate): string {
 // ---------------------------------------------------------------------------
 let compilerProbe: Promise<{ cmd: string; kind: "tectonic" | "pdflatex" } | null> | null = null;
 
-function which(cmd: string): Promise<boolean> {
+/**
+ * La commande répond-elle (code 0) avant le délai ? Sous Windows, `pdflatex --version` (MiKTeX) peut rester
+ * bloqué (premier lancement, recherche de mises à jour) : sans délai, /api/health et le studio attendaient indéfiniment.
+ */
+export function commandResponds(cmd: string, args: string[] = ["--version"], timeoutMs = 5000): Promise<boolean> {
   return new Promise((resolve) => {
-    const p = spawn(cmd, ["--version"], { stdio: "ignore", shell: false });
-    p.on("error", () => resolve(false));
-    p.on("exit", (code) => resolve(code === 0));
+    let done = false;
+    const finish = (ok: boolean) => { if (!done) { done = true; clearTimeout(timer); resolve(ok); } };
+    const p = spawn(cmd, args, { stdio: "ignore", shell: false, windowsHide: true });
+    const timer = setTimeout(() => { try { p.kill(); } catch { /* déjà terminé */ } finish(false); }, timeoutMs);
+    p.on("error", () => finish(false));
+    p.on("exit", (code) => finish(code === 0));
   });
 }
+
+const which = (cmd: string) => commandResponds(cmd);
 
 export function detectLatexCompiler() {
   compilerProbe ||= (async () => {

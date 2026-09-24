@@ -171,3 +171,13 @@ test('ATS : le texte du PDF est extractible dans l\'ordre, sans ligatures (si pd
   assert.ok(order.every((i) => i >= 0), `texte extrait : ${text.slice(0, 300)}`);
   assert.deepEqual([...order].sort((a, b) => a - b), order, 'ordre de lecture');
 });
+
+test('détection du compilateur : une commande bloquée ne bloque pas le serveur (délai maximal)', async () => {
+  const { commandResponds } = await import('../server/latex.ts');
+  const started = Date.now();
+  // Processus qui ne se termine jamais seul (comme pdflatex MiKTeX bloqué sous Windows)
+  assert.equal(await commandResponds(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 300), false);
+  assert.ok(Date.now() - started < 3000, `attente ${Date.now() - started} ms`);
+  assert.equal(await commandResponds(process.execPath, ['--version'], 5000), true);
+  assert.equal(await commandResponds('commande-inexistante-kareer', ['--version'], 1000), false);
+});

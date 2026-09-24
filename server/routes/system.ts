@@ -26,7 +26,8 @@ export function registerSystemRoutes(app: Express) {
       authMode: getAuthMode(),
       jobSources: getSourceStatus(),
       storage: kv().kind,
-      latexCompiler: !!(await detectLatexCompiler())
+      // Détection du compilateur plafonnée : l'état de santé répond toujours vite
+      latexCompiler: await Promise.race([detectLatexCompiler().then((c) => !!c), new Promise<boolean>((r) => setTimeout(() => r(false), 1500))])
     });
   });
 }
