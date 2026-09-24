@@ -126,3 +126,43 @@ export function calculateCandidateMatch(candidateSkills: string[], jobSkillsRequ
 export function scoreValue(match: CandidateMatch): number {
   return match.score ?? 0;
 }
+
+// ---------------------------------------------------------------------------
+// Proximité métier : l'offre est-elle dans le champ du parcours du candidat ?
+// ---------------------------------------------------------------------------
+const TITLE_STOPWORDS = new Set([
+  'h/f', 'f/h', 'hf', 'fh', 'homme', 'femme', 'poste', 'offre', 'emploi', 'alternance', 'stage', 'stagiaire', 'apprenti',
+  'apprentie', 'contrat', 'cdi', 'cdd', 'interim', 'mission', 'junior', 'senior', 'confirme', 'confirmee', 'debutant',
+  'charge', 'chargee', 'assistant', 'assistante', 'responsable', 'agent', 'agente', 'chef', 'adjoint', 'adjointe',
+  'candidature', 'spontanee', 'pour', 'avec', 'dans', 'des', 'les', 'une', 'aux', 'sur', 'niveau'
+]);
+
+/** Racines significatives d'un intitulé (sans accents, sans mots génériques ni niveaux « N3 »). */
+export function titleStems(text: string): string[] {
+  return Array.from(new Set(
+    String(text || '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+      .replace(/\([^)]*\)/g, ' ')
+      .split(/[^a-z0-9+#]+/)
+      .filter((w) => w.length >= 4 && !TITLE_STOPWORDS.has(w) && !/^n\d$/.test(w))
+      .map((w) => w.slice(0, 6))
+  ));
+}
+
+/**
+ * Vrai si l'offre semble hors du parcours : aucune compétence commune ET aucun mot de métier
+ * commun entre l'intitulé de l'offre et le titre, les métiers visés ou les postes occupés.
+ * Sert à prévenir l'utilisateur et à interdire à l'IA de « maquiller » le titre du CV.
+ */
+export function isFarFromProfile(
+  candidate: { title?: string; targetRoles?: string[]; skills?: string[]; experiences?: { title?: string }[] } | null | undefined,
+  job: { title?: string; skillsRequired?: string[] } | null | undefined
+): boolean {
+  const jobStems = titleStems(String(job?.title || '').replace(/^Candidature spontanée — /, ''));
+  if (!jobStems.length) return false;
+  const profileText = [candidate?.title, ...(candidate?.targetRoles || []), ...(candidate?.experiences || []).map((e) => e?.title)].join(' ');
+  const profileStems = new Set(titleStems(profileText));
+  if (jobStems.some((s) => profileStems.has(s))) return false;
+  const match = calculateCandidateMatch(candidate?.skills || [], job?.skillsRequired || []);
+  return !match.matchedKeywords.length;
+}

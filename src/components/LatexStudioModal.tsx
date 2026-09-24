@@ -467,7 +467,7 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
           </div>
           <span className="text-xs text-slate-400">{tailored ? 'Changer de modèle garde votre contenu.' : 'Changer de modèle régénère le CV.'}</span>
           {isRendering && <span className="text-xs text-brand-700" role="status">Mise à jour du CV…</span>}
-          {model && !isGenerating && <span className="text-xs text-slate-400">Rédigé avec {model}</span>}
+
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="secondary" onClick={handleRegenerate} disabled={isGenerating} title="Nouvelle adaptation par l'IA (remplace le contenu actuel)">

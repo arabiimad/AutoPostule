@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { calculateCandidateMatch } from "../../src/utils/skillMatcher.ts";
+import { calculateCandidateMatch, isFarFromProfile } from "../../src/utils/skillMatcher.ts";
 import { generateFallbackLatex, normalizeTemplate } from "../latex.ts";
 import { tailorCv, applyTailored, sanitizeTailored, rewriteText, defaultTailored } from "../cvPipeline.ts";
 import { friendlyAiError, getGeminiClient, callGeminiResilient, extractJsonObject, makeGenerate, cachedOfferAnalysis, candidateBrief, isRateLimitOrQuotaError, MODEL_BEST, MODEL_FAST } from "../ai.ts";
@@ -28,6 +28,9 @@ export function registerTailorRoutes(app: Express) {
     // 1. Analyse de l'offre → 2. contenu adapté + garde-fous → 3. mise en forme par le modèle (jamais par l'IA)
     const analysis = await cachedOfferAnalysis(gen?.generate || null, job);
     const result = await tailorCv(gen?.generate || null, candidate, job, analysis);
+    // Offre hors du parcours : le titre du CV reste le vrai titre du candidat (pas de titre « passerelle » inventé)
+    const far = isFarFromProfile(candidate, job);
+    if (far && candidate?.title) result.tailored.headline = String(candidate.title);
     const latexCode = generateFallbackLatex(applyTailored(candidate, result.tailored), job, template, { tailored: true });
 
     const notices: string[] = [];
@@ -37,8 +40,12 @@ export function registerTailorRoutes(app: Express) {
       logEvent("warn", "cv_tailoring_failed", { message: String(result.error || "").slice(0, 300) });
       notices.push(`Adaptation par l'IA indisponible (${friendlyAiError(result.error)}) : votre CV a été construit à partir de votre profil, sans reformulation. Vous pouvez réessayer dans quelques minutes avec « Régénérer avec l'IA ».`);
     }
+    if (far) {
+      notices.push("Ce poste semble éloigné de votre parcours : votre titre est conservé et seules vos compétences transférables sont mises en avant. Vérifiez que l'offre vous correspond avant de postuler.");
+    }
     if (result.rejected.length) {
-      notices.push(`${result.rejected.length} proposition(s) de l'IA écartée(s) car absentes de votre profil (${result.rejected.slice(0, 2).map((r) => r.reason).join(" ; ")}) : le texte d'origine est conservé.`);
+      const n = result.rejected.length;
+      notices.push(`${n === 1 ? "Une reformulation de l'IA a été écartée" : `${n} reformulations de l'IA ont été écartées`} car ${n === 1 ? "elle ajoutait" : "elles ajoutaient"} des éléments absents de votre profil : vos phrases d'origine sont conservées.`);
     }
     if (result.source !== "ai") res.locals.noCharge = true; // pas d'IA utilisée : non décompté
     if (premium && gen?.used.length && !gen.used.includes(MODEL_BEST) && result.source === "ai") {
