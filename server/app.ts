@@ -11,6 +11,7 @@ import { registerTailorRoutes } from "./routes/tailor.ts";
 import { registerLatexRoutes } from "./routes/latex.ts";
 import { registerInterviewRoutes } from "./routes/interview.ts";
 import { registerAccountRoutes, registerAccountApiRoutes } from "./routes/account.ts";
+import { registerToolRoutes } from "./routes/tools.ts";
 
 /** Application Express (API seulement) : utilisée par server.ts et par les tests. */
 export function createApp(): Express {
@@ -37,6 +38,8 @@ export function createApp(): Express {
   // Recherche d'offres : quotas des API partenaires (60/min pour La bonne alternance), résultats en cache
   app.use("/api/jobs", createRateLimiter("jobs", 40, 60_000));
   app.use("/api/client-errors", createRateLimiter("errors", 20, 60_000));
+  // Outils publics (vérificateur ATS, correspondance CV / offre) : sans compte, sans IA, limite par IP
+  app.use("/api/tools", createRateLimiter("tools", 20, 60_000));
   // La photo du profil ne sert qu'à la mise en page : retirée avant tout traitement (IA, garde-fous, journaux)
   app.use(["/api/tailor", "/api/interview"], (req: any, _res: any, next: any) => {
     if (req.body?.candidate) req.body.candidate = withoutPhoto(req.body.candidate);
@@ -50,6 +53,7 @@ export function createApp(): Express {
   registerLatexRoutes(app);
   registerInterviewRoutes(app);
   registerAccountApiRoutes(app);
+  registerToolRoutes(app);
 
   // Erreurs non gérées sur /api
   app.use("/api", (err: any, req: any, res: any, next: any) => {

@@ -183,3 +183,12 @@
 .dark .thin-scroll { scrollbar-color: #354157 transparent; }
 .dark .thin-scroll::-webkit-scrollbar-thumb { background: #354157; }
 .dark iframe { filter: brightness(.85) contrast(1.05); }
+
+/* Loader de marque : le tracé du logo se dessine en boucle (désactivé si l'utilisateur limite les animations) */
+@keyframes brand-draw { 0% { stroke-dashoffset: 40; } 55%, 100% { stroke-dashoffset: 0; } }
+@keyframes brand-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+.brand-loader-mark { animation: brand-pulse 1.4s ease-in-out infinite; }
+.brand-loader-mark path { stroke-dasharray: 40; animation: brand-draw 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .brand-loader-mark, .brand-loader-mark path { animation: none; stroke-dasharray: none; }
+}

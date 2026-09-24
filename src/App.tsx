@@ -24,6 +24,13 @@ import { FollowUpModal } from './components/FollowUpModal';
 import { calculateCandidateMatch } from './utils/skillMatcher';
 import { getApplyUrl } from './utils/jobLinks';
 import { normalizeCvTemplate } from './utils/templates';
+import { ToolsView } from './components/tools/ToolsView';
+
+const isPublicTool = (t: TabId) => t === 'ats' || t === 'match';
+const PUBLIC_TOOL_META: Record<'ats' | 'match', { title: string; description: string }> = {
+  ats: { title: 'Vérificateur de CV ATS gratuit — AutoPostule', description: 'Testez gratuitement et sans inscription si votre CV est lisible par les logiciels de recrutement (ATS) : texte, sections, coordonnées, mise en page.' },
+  match: { title: 'Comparer son CV à une offre d’emploi, gratuit — AutoPostule', description: 'Collez une offre et déposez votre CV : découvrez gratuitement les mots-clés de l’offre présents et absents de votre CV.' }
+};
 import {
   FileCode2,
   Award,
@@ -242,9 +249,29 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
+  // Première recherche d'offres : pas sur les outils publics (chaque visite consommerait les quotas des API d'offres)
+  const initialSearchDone = useRef(false);
   useEffect(() => {
+    if (initialSearchDone.current || isPublicTool(currentTab)) return;
+    initialSearchDone.current = true;
     const s = initialSearch.current;
     handleFetchLiveJobs(s.query, s.contractType, s.location, s.radius);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTab]);
+
+  // Titre et description de page (partage, moteurs de recherche) pour les outils publics
+  useEffect(() => {
+    const meta = PUBLIC_TOOL_META[currentTab as 'ats' | 'match'];
+    const title = meta?.title || 'AutoPostule — Offres, CV sur mesure et suivi de candidatures';
+    document.title = title;
+    const desc = document.querySelector('meta[name="description"]');
+    if (desc) {
+      if (!desc.getAttribute('data-default')) desc.setAttribute('data-default', desc.getAttribute('content') || '');
+      desc.setAttribute('content', meta?.description || desc.getAttribute('data-default') || '');
+    }
+  }, [currentTab]);
+
+  useEffect(() => {
     // Affichage immédiat des données locales (session locale / invité) sans attendre le service de comptes
     loadLocalSession();
 
@@ -279,7 +306,8 @@ export default function App() {
           await cloud.saveProfile(user.uid, profile);
         }
         setUserProfile(profile);
-        if (!profile.fullName || profile.skills.length === 0 || profile.experiences.length === 0) {
+        // Profil vide : import du CV proposé, sauf sur un outil public (la page doit rester utilisable)
+        if ((!profile.fullName || profile.skills.length === 0 || profile.experiences.length === 0) && !isPublicTool(readTab())) {
           setIsMandatoryOnboarding(!stored);
           setCvUploadModalOpen(true);
         }
@@ -1067,6 +1095,17 @@ export default function App() {
               setUserProfile(EMPTY_PROFILE);
               setApplications([]);
               setCurrentTab('radar');
+            }}
+          />
+        )}
+
+        {isPublicTool(currentTab) && (
+          <ToolsView
+            tool={currentTab as 'ats' | 'match'}
+            onToolChange={(t) => setCurrentTab(t)}
+            onCreateCv={() => {
+              setIsMandatoryOnboarding(false);
+              setCvUploadModalOpen(true);
             }}
           />
         )}

@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, FileText, KanbanSquare, MessagesSquare, UserRound, LogOut, Bot, ChevronDown, Upload, Bell, Sun, Moon, Monitor, Sparkles } from 'lucide-react';
+import { Search, FileText, KanbanSquare, MessagesSquare, UserRound, LogOut, Bot, ChevronDown, Upload, Bell, Sun, Moon, Monitor, Sparkles, ScanSearch } from 'lucide-react';
 import { getThemePref, setThemePref, type ThemePref } from '../utils/theme';
 import type { AppUser as User } from '../data/cloud';
 import { Button, cx } from './ui';
-
-export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile' | 'pricing';
+export type { TabId } from '../utils/url';
+import type { TabId } from '../utils/url';
 
 interface HeaderProps {
   currentTab: TabId;
@@ -110,11 +110,12 @@ export const Header: React.FC<HeaderProps> = ({
                 <path d="M4 17l5-5 4 4 7-8" /><path d="M15 8h5v5" />
               </svg>
             </span>
-            <span className="text-[17px] font-extrabold tracking-tight text-slate-900">AutoPostule</span>
+            {/* Petits écrans : pictogramme seul, pour laisser la place aux boutons (le nom reste dans l'aria-label) */}
+            <span className="hidden min-[480px]:inline text-[17px] font-extrabold tracking-tight text-slate-900">AutoPostule</span>
           </button>
 
           <nav className="hidden lg:flex items-center h-full" aria-label="Navigation principale">
-            {TABS.map(({ id, label, icon: Icon }) => {
+            {TABS.map(({ id, label, short }) => {
               const active = currentTab === id;
               return (
                 <button
@@ -126,16 +127,36 @@ export const Header: React.FC<HeaderProps> = ({
                     active ? 'text-slate-900' : 'text-slate-500 hover:text-slate-900'
                   )}
                 >
-                  <Icon className="h-4 w-4 hidden 2xl:block" />
-                  {label}
+                  {/* Libellé court sur les écrans moyens : l'en-tête tient sur une ligne */}
+                  <span className="hidden xl:inline">{label}</span><span className="xl:hidden">{short}</span>
                   {tabBadge(id)}
                   {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-brand-600" />}
                 </button>
               );
             })}
+            {/* Outils publics (vérificateur ATS, comparaison CV / offre) */}
+            <button
+              onClick={() => setCurrentTab('ats')}
+              aria-current={currentTab === 'ats' || currentTab === 'match' ? 'page' : undefined}
+              title="Outils gratuits : vérificateur de CV ATS, comparaison CV / offre"
+              className={cx(
+                'relative flex h-full items-center gap-2 px-2.5 xl:px-3 text-sm font-medium whitespace-nowrap transition-colors',
+                currentTab === 'ats' || currentTab === 'match' ? 'text-slate-900' : 'text-slate-500 hover:text-slate-900'
+              )}
+            >
+              Outils
+              {(currentTab === 'ats' || currentTab === 'match') && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-brand-600" />}
+            </button>
           </nav>
 
           <div className="ml-auto flex items-center gap-2" ref={menuRef}>
+            <button
+              onClick={() => setCurrentTab('ats')}
+              aria-current={currentTab === 'ats' || currentTab === 'match' ? 'page' : undefined}
+              className={cx('lg:hidden flex items-center gap-1 rounded-full px-2.5 h-8 text-xs font-semibold', currentTab === 'ats' || currentTab === 'match' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')}
+            >
+              <ScanSearch className="h-3.5 w-3.5" aria-hidden="true" /> Outils
+            </button>
             <ThemeButton />
             {followUpDueCount > 0 && (
               <button
@@ -160,7 +181,7 @@ export const Header: React.FC<HeaderProps> = ({
                 aria-current={currentTab === 'pricing' ? 'page' : undefined}
                 aria-label="Passer à Premium"
               >
-                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> <span className="hidden sm:inline"><span className="hidden 2xl:inline">Passer </span>Premium</span>
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> <span className="hidden sm:inline lg:hidden xl:inline">Premium</span>
               </button>
             )}
             {onOpenCvUpload && (
@@ -211,7 +232,8 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <div className="flex items-center gap-1.5">
                 <Button variant="ghost" size="sm" onClick={() => onOpenAuthModal('login')}>Connexion</Button>
-                <span className="hidden sm:block">
+                {/* Écrans moyens avec menu complet : l'inscription reste accessible depuis « Connexion » */}
+                <span className="hidden md:block lg:hidden">
                   <Button variant="primary" size="sm" onClick={() => onOpenAuthModal('register')}>Créer un compte</Button>
                 </span>
               </div>

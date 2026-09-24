@@ -279,6 +279,44 @@ try {
   check('aucune erreur JavaScript', errors.length === 0, errors.slice(0, 3).join(' | '));
   await ctx.close();
 
+  // --- Outils publics (sans compte) ------------------------------------------------------------------
+  console.log('\nOutils publics');
+  for (const [label, viewport] of [['bureau', { width: 1280, height: 900 }], ['mobile', { width: 390, height: 844 }]]) {
+    const tctx = await browser.newContext({ viewport, locale: 'fr-FR', ...(label === 'mobile' ? { isMobile: true, hasTouch: true } : {}) });
+    const tp = await tctx.newPage();
+    const jobCalls = [];
+    tp.on('request', (r) => { if (r.url().includes('/api/jobs/search')) jobCalls.push(r.url()); });
+    const toolErrors = [];
+    tp.on('pageerror', (e) => toolErrors.push(e.message));
+    await tp.goto(`${BASE}/verificateur-cv-ats`, { waitUntil: 'domcontentloaded' });
+    await tp.waitForTimeout(800);
+    check(`[${label}] vérificateur ATS : page publique, titre dédié`, /Vérificateur de CV ATS/.test(await tp.title()) && await tp.getByRole('heading', { name: /logiciels de recrutement/ }).isVisible());
+    await tp.getByLabel('Choisir le fichier de votre CV').setInputFiles(path.join(root, 'tests', 'fixtures', 'cv-exemple.docx'));
+    await tp.getByRole('button', { name: 'Analyser mon CV' }).click();
+    await tp.getByRole('heading', { name: /Compatibilité ATS/ }).waitFor({ timeout: 15000 });
+    const atsText = await tp.textContent('main');
+    check(`[${label}] vérificateur ATS : score et contrôles détaillés`, /Coordonnées/.test(atsText) && /Sections standard/.test(atsText) && /\/ 100|sur 100/.test(await tp.locator('svg[role=img]').first().getAttribute('aria-label') || ''), atsText.slice(0, 120));
+    await tp.getByRole('button', { name: /Comparer ce CV à une offre/ }).click();
+    await tp.waitForTimeout(300);
+    check(`[${label}] adresse partageable du comparateur`, new URL(tp.url()).pathname === '/match-cv-offre');
+    // Offre : déposée en PDF sur bureau, collée en texte sur mobile
+    if (label === 'bureau') {
+      await tp.getByLabel('Choisir le fichier de l’offre').setInputFiles(path.join(root, 'tests', 'fixtures', 'offre-exemple.pdf'));
+      check('[bureau] offre déposée en document (PDF)', await tp.getByText('offre-exemple.pdf').waitFor({ timeout: 5000 }).then(() => true, () => false));
+    } else {
+      await tp.getByRole('group', { name: /fournir l’offre/ }).getByRole('button', { name: 'Coller le texte' }).click();
+      await tp.getByLabel('Texte de l’offre').fill('Développeur React H/F - CDI\nMissions : développement d’interfaces React, API REST en Node.js.\nProfil : TypeScript, Docker, Kubernetes souhaité.');
+    }
+    await tp.getByRole('button', { name: 'Comparer', exact: true }).click();
+    await tp.getByRole('heading', { name: /présents dans votre CV/ }).waitFor({ timeout: 15000 });
+    const matchText = await tp.textContent('main');
+    check(`[${label}] comparaison CV / offre : présents et absents`, /React/.test(matchText) && /Absents de votre CV/.test(matchText) && /Kubernetes/.test(matchText), matchText.slice(0, 160));
+    check(`[${label}] outils : aucune recherche d’offres lancée (quotas préservés)`, jobCalls.length === 0, jobCalls.join(' '));
+    check(`[${label}] outils : pas de défilement horizontal, aucune erreur`, !(await tp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) && toolErrors.length === 0, toolErrors.join(' | '));
+    await tp.screenshot({ path: path.join(outDir, `outils-${label}.png`), fullPage: true }).catch(() => null);
+    await tctx.close();
+  }
+
   // --- Mobile -----------------------------------------------------------------------------------------
   console.log('\nMobile');
   const m = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });

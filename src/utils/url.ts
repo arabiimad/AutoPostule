@@ -3,7 +3,7 @@
  * Les liens deviennent partageables et les boutons Précédent / Suivant du navigateur fonctionnent.
  *   /?onglet=offres&q=développeur&lieu=Lyon&rayon=30&contrat=alternance&offre=ft-123
  */
-export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile' | 'pricing';
+export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile' | 'pricing' | 'ats' | 'match';
 
 const TAB_SLUGS: Record<TabId, string> = {
   radar: 'offres',
@@ -12,7 +12,9 @@ const TAB_SLUGS: Record<TabId, string> = {
   agent: 'assistant',
   latex: 'cv',
   profile: 'profil',
-  pricing: 'tarifs'
+  pricing: 'tarifs',
+  ats: 'verificateur-cv-ats',
+  match: 'match-cv-offre'
 };
 const SLUG_TABS = Object.fromEntries(Object.entries(TAB_SLUGS).map(([k, v]) => [v, k])) as Record<string, TabId>;
 
@@ -23,7 +25,12 @@ export interface SearchUrlState {
   contractType: string;
 }
 
+/** Outils publics : adresse directe partageable (/verificateur-cv-ats, /match-cv-offre). */
+export const PUBLIC_TOOL_PATHS: Partial<Record<TabId, string>> = { ats: '/verificateur-cv-ats', match: '/match-cv-offre' };
+
 export function readTab(): TabId {
+  const byPath = (Object.keys(PUBLIC_TOOL_PATHS) as TabId[]).find((t) => window.location.pathname.replace(/\/+$/, '') === PUBLIC_TOOL_PATHS[t]);
+  if (byPath) return byPath;
   const slug = new URLSearchParams(window.location.search).get('onglet') || '';
   return SLUG_TABS[slug] || 'radar';
 }
@@ -58,6 +65,16 @@ export function writeUrl(patch: Record<string, string | number | null | undefine
 }
 
 export function writeTab(tab: TabId, push = true) {
+  // Outils publics : adresse propre, sans paramètres de l'application
+  const toolPath = PUBLIC_TOOL_PATHS[tab];
+  if (toolPath) {
+    if (window.location.pathname !== toolPath || window.location.search) window.history[push ? 'pushState' : 'replaceState'](null, '', toolPath);
+    return;
+  }
+  // Retour dans l'application depuis un outil : on revient à la racine
+  if (Object.values(PUBLIC_TOOL_PATHS).includes(window.location.pathname.replace(/\/+$/, ''))) {
+    window.history[push ? 'pushState' : 'replaceState'](null, '', '/');
+  }
   // L'offre ouverte n'a de sens que sur l'onglet Offres
   writeUrl({ onglet: TAB_SLUGS[tab], ...(tab !== 'radar' ? { offre: null } : {}) }, push);
 }
