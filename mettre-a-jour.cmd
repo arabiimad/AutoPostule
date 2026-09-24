@@ -11,12 +11,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Date calculee hors du bloc IF (sinon la variable y reste vide)
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set STAMP=%%i
+
 rem 1. Sauvegarde de ce qui a change depuis le dernier envoi
 git add -A
 git rm -r -q --cached --ignore-unmatch .env .env.local .env.production node_modules dist >nul 2>&1
 git diff --cached --quiet
 if errorlevel 1 (
-  for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmm"') do set STAMP=%%i
   git checkout -q -B version-locale-%STAMP%
   git -c user.name="Imad" -c user.email="arabiimad@outlook.com" commit -q -m "Version locale (%STAMP%)"
   git push -q -u origin version-locale-%STAMP%
