@@ -12,6 +12,7 @@ import { authMiddleware, getAuthMode } from "./server/auth.ts";
 import { extractTextFromDocx } from "./server/docx.ts";
 import { kv, countApiCall, getQuotaUsage } from "./server/store.ts";
 import { createHash } from "node:crypto";
+import { isRateLimitOrQuotaError, tailorFailureNotice, aiErrorSummary } from "./server/aiErrors.ts";
 import {
   analyzeOffer, tailorCv, applyTailored, sanitizeTailored, rewriteText, fallbackOfferAnalysis, defaultTailored,
   type GenerateFn, type OfferAnalysis
@@ -58,21 +59,6 @@ function getGeminiClient(): GoogleGenAI | null {
 // Base d'offres de DÉMONSTRATION : utilisée seulement si aucune source réelle n'est configurée.
 const DEMO_OFFERS = COMPREHENSIVE_REAL_JOBS.map((j) => ({ ...j, origin: "demo" as const }));
 
-function isRateLimitOrQuotaError(error: any): boolean {
-  if (!error) return false;
-  const str = String(error?.message || error?.status || error?.code || error);
-  return (
-    str.includes("429") ||
-    str.includes("503") ||
-    str.includes("RESOURCE_EXHAUSTED") ||
-    str.includes("UNAVAILABLE") ||
-    str.includes("quota") ||
-    str.includes("high demand") ||
-    str.includes("rate-limits") ||
-    str.includes("rate limit") ||
-    str.includes("overloaded")
-  );
-}
 
 /** Âge (en jours) des libellés de la base de démo : « Hier », « Il y a 3 jours »… */
 function demoAgeInDays(label: string): number {
@@ -691,14 +677,15 @@ Renvoie UNIQUEMENT un tableau JSON valide (sans backticks markdown si possible, 
 
     const notices: string[] = [];
     if (!ai) notices.push("Service IA indisponible : CV construit à partir de votre profil, sans reformulation.");
-    else if (result.source !== "ai") notices.push(`Adaptation IA impossible (${result.error || "erreur"}) : CV construit à partir de votre profil.`);
+    else if (result.source !== "ai") notices.push(tailorFailureNotice(result.error));
     if (result.rejected.length) {
       notices.push(`${result.rejected.length} proposition(s) de l'IA écartée(s) car absentes de votre profil (${result.rejected.slice(0, 2).map((r) => r.reason).join(" ; ")}) : le texte d'origine est conservé.`);
     }
+    // Détails techniques (modèle de repli, quota, erreur de Google) : journaux du serveur uniquement
     if (gen?.used.length && !gen.used.includes(MODEL_BEST) && result.source === "ai") {
-      notices.push(`Rédigé avec ${gen.used[gen.used.length - 1]} (le modèle ${MODEL_BEST} n'est pas accessible avec cette clé : activez la facturation du projet Google Cloud pour l'utiliser).`);
+      logEvent("warn", "gemini_best_model_unused", { used: gen.used[gen.used.length - 1], best: MODEL_BEST });
     }
-    logEvent("info", "cv_tailored", { source: result.source, models: gen?.used || [], rejected: result.rejected.length, analysis: analysis.source });
+    logEvent(result.source === "ai" ? "info" : "warn", "cv_tailored", { source: result.source, models: gen?.used || [], rejected: result.rejected.length, analysis: analysis.source, ...(result.error ? { error: aiErrorSummary(result.error) } : {}) });
 
     return res.json({
       template,
@@ -750,7 +737,7 @@ Renvoie UNIQUEMENT un tableau JSON valide (sans backticks markdown si possible, 
         rejected: out.rejected ? `Proposition écartée : ${out.rejected}. Le texte d'origine est conservé.` : undefined
       });
     } catch (e: any) {
-      return res.status(502).json({ success: false, error: isRateLimitOrQuotaError(e) ? "Quota IA atteint : réessayez plus tard." : "Le service IA n'a pas répondu. Réessayez." });
+      return res.status(502).json({ success: false, error: isRateLimitOrQuotaError(e) ? "L'assistant IA est très sollicité en ce moment : réessayez dans quelques minutes, ou modifiez le texte à la main." : "L'assistant IA n'a pas répondu. Réessayez, ou modifiez le texte à la main." });
     }
   });
 
@@ -802,7 +789,7 @@ DIRECTIVES :
       }
       return fallback("Réponse IA vide : lettre modèle à personnaliser.");
     } catch (e: any) {
-      return fallback(isRateLimitOrQuotaError(e) ? "Quota IA atteint : lettre modèle à personnaliser." : "Service IA en erreur : lettre modèle à personnaliser.");
+      return fallback(isRateLimitOrQuotaError(e) ? "L'assistant IA est très sollicité en ce moment : voici une lettre modèle à personnaliser. Réessayez dans quelques minutes pour une lettre sur mesure." : "L'assistant IA n'a pas répondu : voici une lettre modèle à personnaliser.");
     }
   });
 
@@ -972,7 +959,8 @@ Analyse avec la méthode STAR. Renvoie uniquement un JSON valide :
     const status = err.type === "entity.too.large" ? 413 : (err.status || 500);
     return res.status(status).json({
       success: false,
-      error: status === 413 ? "Fichier trop volumineux (8 Mo maximum)." : (err.message || "Une erreur est survenue.")
+      // Jamais de message technique à l'écran : le détail est dans le journal ci-dessus
+      error: status === 413 ? "Fichier trop volumineux (12 Mo maximum)." : status < 500 ? "Requête invalide : rechargez la page puis réessayez." : "Une erreur est survenue. Réessayez dans un instant."
     });
   });
 

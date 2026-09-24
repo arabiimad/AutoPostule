@@ -68,6 +68,13 @@ try {
   const page2 = await (await fetch(`${BASE}/api/jobs/search`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'comptable', location: 'Avignon', page: 1 }) })).json();
   check('pagination serveur : d’autres pages annoncées', page2.hasMore === true && page2.jobs.filter((j) => /^Comptable/.test(j.title)).length === 50, `hasMore=${page2.hasMore} total=${page2.total}`);
 
+  const quotaRes = await (await fetch(`${BASE}/api/tailor/latex`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ candidate: cv.profile, job: { title: 'Poste QUOTA-E2E', company: 'Test', description: 'QUOTA-E2E', skillsRequired: [] } })
+  })).json();
+  check('quota IA épuisé : CV construit quand même, message clair sans détail technique',
+    !!quotaRes.latexCode && /très sollicité/.test(quotaRes.notice || '') && !/[{}]|googleapis|RESOURCE_EXHAUSTED|429|gemini/i.test(quotaRes.notice || ''), quotaRes.notice);
+
   // --- Parcours complet (bureau) ---------------------------------------------------------------------
   console.log('\nParcours bureau');
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true, locale: 'fr-FR' });
@@ -144,9 +151,22 @@ try {
 
   // Photo de CV (facultative) dans le profil
   await page.locator('header nav button', { hasText: 'Profil' }).click();
-  await page.getByLabel('Choisir une photo de CV').setInputFiles(path.join(root, 'tests', 'fixtures', 'photo.jpg'));
-  await page.waitForTimeout(500);
-  check('photo ajoutée au profil', await page.getByAltText('Votre photo de CV').isVisible());
+  // Glisser-déposer : un fichier refusé, puis la photo
+  const dropFile = async (name, type, b64) => {
+    const dt = await page.evaluateHandle(({ name, type, b64 }) => {
+      const d = new DataTransfer();
+      d.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], name, { type }));
+      return d;
+    }, { name, type, b64 });
+    const zone = page.getByTestId('photo-dropzone');
+    await zone.dispatchEvent('dragover', { dataTransfer: dt });
+    await zone.dispatchEvent('drop', { dataTransfer: dt });
+    await page.waitForTimeout(500);
+  };
+  await dropFile('cv.pdf', 'application/pdf', Buffer.from('%PDF-1.4').toString('base64'));
+  check('glisser-déposer : format refusé expliqué', await page.getByText(/Format non pris en charge/).isVisible());
+  await dropFile('photo.jpg', 'image/jpeg', fs.readFileSync(path.join(root, 'tests', 'fixtures', 'photo.jpg')).toString('base64'));
+  check('glisser-déposer : photo ajoutée au profil', await page.getByAltText('Votre photo de CV').isVisible() && !(await page.getByText(/Format non pris en charge/).isVisible()));
   await page.getByRole('button', { name: /^Enregistrer$/ }).first().click();
   await page.waitForTimeout(500);
   await page.locator('header nav button', { hasText: 'Candidatures' }).click();

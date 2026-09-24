@@ -39,6 +39,7 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
   const [newSkill, setNewSkill] = useState('');
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
   const photoInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -197,7 +198,17 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
               <UserRound className="h-4 w-4 text-brand-600" aria-hidden="true" />
               Coordonnées
             </h2>
-            <div className="flex items-center gap-4">
+            {/* Zone photo : glisser-déposer une image, ou bouton (clavier, mobile) */}
+            <div
+              data-testid="photo-dropzone"
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDraggingPhoto(true); }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDraggingPhoto(false); }}
+              onDrop={(e) => { e.preventDefault(); setIsDraggingPhoto(false); handlePhotoFile(e.dataTransfer.files?.[0]); }}
+              className={cx(
+                'flex items-center gap-4 rounded-xl border-2 border-dashed p-3 transition-colors',
+                isDraggingPhoto ? 'border-brand-500 bg-brand-50' : 'border-slate-200'
+              )}
+            >
               <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100 ring-1 ring-slate-200">
                 {profile.photo
                   ? <img src={profile.photo} alt="Votre photo de CV" className="h-full w-full object-cover" />
@@ -215,7 +226,9 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
                     </Button>
                   )}
                 </div>
-                <p className="text-xs text-slate-500">Facultative. Affichée seulement sur le CV « Photo ». Jamais envoyée à l’IA.</p>
+                <p className="text-xs text-slate-500">
+                  {isDraggingPhoto ? 'Déposez la photo ici.' : 'Glissez votre photo ici, ou cliquez sur le bouton. Facultative : affichée seulement sur le CV « Photo », jamais envoyée à l’IA.'}
+                </p>
               </div>
               <input
                 ref={photoInputRef}

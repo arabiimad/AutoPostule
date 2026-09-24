@@ -94,7 +94,6 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
   const [activeTab, setActiveTab] = useState<StudioTab>(initialTailored ? 'content' : 'latex');
   const [tailored, setTailored] = useState<TailoredCv | null>(initialTailored || null);
   const [analysis, setAnalysis] = useState<OfferAnalysis | null>(initialAnalysis || null);
-  const [model, setModel] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -265,7 +264,6 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
           setActiveTab(tab => (tab === 'latex' || tab === 'history' ? 'content' : tab));
         }
         if (dataLatex.analysis) setAnalysis(dataLatex.analysis);
-        setModel(dataLatex.model || null);
       }
       if (resLetter.ok && dataLetter?.letter) {
         setCoverLetter(dataLetter.letter);
@@ -477,7 +475,6 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
             <span className="text-xs text-slate-600">Ce modèle affiche votre photo : ajoutez-la dans votre profil (facultatif).</span>
           )}
           {isRendering && <span className="text-xs text-brand-700" role="status">Mise à jour du CV…</span>}
-          {model && !isGenerating && <span className="text-xs text-slate-400">Rédigé avec {model}</span>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="secondary" onClick={handleRegenerate} disabled={isGenerating} title="Nouvelle adaptation par l'IA (remplace le contenu actuel)">
