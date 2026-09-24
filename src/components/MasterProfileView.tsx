@@ -13,7 +13,8 @@ import {
   X
 } from 'lucide-react';
 import { UserProfile, ContractType } from '../types';
-import type { AppUser as User } from '../data/cloud';
+import { isCloudUser, type AppUser as User } from '../data/cloud';
+import { AccountDataCard } from './AccountDataCard';
 import { Button, PageHeader, cx } from './ui';
 
 interface MasterProfileViewProps {
@@ -23,6 +24,9 @@ interface MasterProfileViewProps {
   currentUser?: User | null;
   onOpenAuthModal?: (mode: 'login' | 'register') => void;
   onOpenCvUpload?: () => void;
+  /** Compte supprimé (retour à une session vide). */
+  onAccountDeleted?: () => void;
+  showToast?: (title: string, desc: string, error?: boolean) => void;
 }
 
 export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
@@ -31,7 +35,9 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
   isSaving,
   currentUser,
   onOpenAuthModal,
-  onOpenCvUpload
+  onOpenCvUpload,
+  onAccountDeleted,
+  showToast
 }) => {
   const [profile, setProfile] = useState<UserProfile>(userProfile);
   const [newSkill, setNewSkill] = useState('');
@@ -127,7 +133,7 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
       />
 
       {/* État du compte */}
-      {currentUser ? (
+      {isCloudUser(currentUser) ? (
         <div className="flex flex-col justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
@@ -375,6 +381,12 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
         </div>
 
       </div>
+
+      {isCloudUser(currentUser) && onAccountDeleted && (
+        <div className="mt-6">
+          <AccountDataCard email={currentUser.email} onDeleted={onAccountDeleted} showToast={showToast} />
+        </div>
+      )}
 
     </form>
   );

@@ -9,6 +9,9 @@ import { KanbanCrmView } from './components/KanbanCrmView';
 import { InterviewCockpitModal } from './components/InterviewCockpitModal';
 import { MasterProfileView } from './components/MasterProfileView';
 import { AuthModal } from './components/AuthModal';
+import { PricingView } from './components/PricingView';
+import { UpgradeModal } from './components/UpgradeModal';
+import { fetchUsage, QUOTA_EVENT, type AccountUsage, type QuotaEventDetail } from './data/account';
 import { CvUploadModal } from './components/CvUploadModal';
 import { EMPTY_PROFILE } from './mockData';
 import { UserProfile, JobOffer, Application, AgentLog, ApplicationStatus, InterviewPrepKit, CvTemplate, SavedSearch, DossierVersion } from './types';
@@ -144,6 +147,41 @@ export default function App() {
   profileRef.current = userProfile;
   const applicationsRef = useRef<Application[]>(applications);
   applicationsRef.current = applications;
+
+  // Forfait et consommation (freemium)
+  const [accountUsage, setAccountUsage] = useState<AccountUsage | null>(null);
+  const [quotaDetail, setQuotaDetail] = useState<QuotaEventDetail | null>(null);
+  const [paymentStatus] = useState<string | null>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const v = p.get('paiement');
+    if (v) {
+      p.delete('paiement');
+      const qs = p.toString();
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+    }
+    return v;
+  });
+  const refreshUsage = () => fetchUsage().then(setAccountUsage).catch(() => {});
+  useEffect(() => {
+    refreshUsage();
+  }, [currentUser?.uid]);
+  useEffect(() => {
+    if (currentTab === 'pricing') refreshUsage();
+  }, [currentTab]);
+  useEffect(() => {
+    // Après un paiement, le webhook Stripe active Premium en quelques secondes
+    if (paymentStatus !== 'ok') return;
+    const t = [3000, 8000, 15000].map((ms) => setTimeout(refreshUsage, ms));
+    return () => t.forEach(clearTimeout);
+  }, [paymentStatus]);
+  useEffect(() => {
+    const onQuota = (e: Event) => {
+      setQuotaDetail((e as CustomEvent<QuotaEventDetail>).detail);
+      refreshUsage();
+    };
+    window.addEventListener(QUOTA_EVENT, onQuota);
+    return () => window.removeEventListener(QUOTA_EVENT, onQuota);
+  }, []);
 
   /** Change d'onglet et l'inscrit dans l'historique du navigateur (bouton Précédent). */
   const setCurrentTab = (tab: TabId) => {
@@ -833,6 +871,7 @@ export default function App() {
         followUpDueCount={followUpDueCount}
         applicationsCount={applications.length}
         alertsNewCount={(userProfile.savedSearches || []).reduce((n, s) => n + (s.newCount || 0), 0)}
+        plan={accountUsage?.plan ?? null}
       />
 
       {/* Main Content Area */}
@@ -1007,10 +1046,32 @@ export default function App() {
               setIsMandatoryOnboarding(false);
               setCvUploadModalOpen(true);
             }}
+            showToast={showToast}
+            onAccountDeleted={async () => {
+              await cloud.signOut().catch(() => {});
+              setCurrentUser(null);
+              setUserProfile(EMPTY_PROFILE);
+              setApplications([]);
+              setCurrentTab('radar');
+            }}
+          />
+        )}
+
+        {currentTab === 'pricing' && (
+          <PricingView
+            usage={accountUsage}
+            signedIn={isCloudUser(currentUser)}
+            onOpenAuthModal={(mode) => {
+              setAuthModalMode(mode);
+              setAuthModalOpen(true);
+            }}
+            showToast={showToast}
+            paymentStatus={paymentStatus}
           />
         )}
 
       </main>
+
 
       {/* AUTHENTICATION & ACCOUNT CREATION MODAL */}
       <AuthModal
@@ -1147,6 +1208,20 @@ export default function App() {
         </div>
       )}
 
+
+      {/* Toujours au premier plan (y compris au-dessus du Studio) */}
+      <UpgradeModal
+        detail={quotaDetail}
+        onClose={() => setQuotaDetail(null)}
+        onSeePlans={() => {
+          setQuotaDetail(null);
+          // Les fenêtres ouvertes (Studio, entretien) masqueraient la page Tarifs
+          setSelectedJobForLatex(null);
+          setSelectedAppForLatex(null);
+          setSelectedAppForInterview(null);
+          setCurrentTab('pricing');
+        }}
+      />
     </div>
   );
 }

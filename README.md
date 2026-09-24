@@ -82,6 +82,26 @@ Comptes (e-mail + mot de passe, Google en option), profils et candidatures sont 
 5. Production : configurez un SMTP (Authentication → Emails) ; le service d'e-mail par défaut de Supabase est limité à quelques envois par heure.
 6. Connexion Google (facultatif) : Authentication → Providers → Google, puis `VITE_AUTH_GOOGLE=on`.
 
+## Forfaits (freemium) et paiement
+
+| | Gratuit | Premium (9,99 €/mois) |
+|---|---|---|
+| CV adaptés par l'IA | 3 / mois (modèle rapide) | 150 / mois (modèle Pro) |
+| Lettres de motivation | 3 / mois | 150 / mois |
+| Retouches et évaluations IA | 15 / mois | 600 / mois |
+| Préparations d'entretien | 3 / mois | 80 / mois |
+| Imports de CV | 5 / mois | 30 / mois |
+
+- Les quotas sont vérifiés par le serveur : table `usage` (Supabase) pour les comptes, compteur par adresse IP pour les visiteurs. Une réponse sans IA (repli, erreur) n'est pas décomptée. Au-delà : réponse `402 QUOTA_EXCEEDED` et fenêtre « Passer à Premium ».
+- Page **Tarifs** (`?onglet=tarifs`) : forfaits, consommation du mois, souscription et gestion de l'abonnement.
+- **Profil → Mes données** : export JSON de toutes les données et suppression définitive du compte (RGPD).
+
+Activer le paiement (Stripe) :
+1. Créez un compte Stripe (mode test pour commencer), puis un produit « AutoPostule Premium » avec un tarif récurrent mensuel : `STRIPE_PRICE_PREMIUM=price_…`.
+2. `STRIPE_SECRET_KEY=sk_test_…` (Développeurs → Clés API).
+3. Webhook (Développeurs → Webhooks) vers `https://votre-domaine/api/billing/webhook`, évènements `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted` : `STRIPE_WEBHOOK_SECRET=whsec_…`. En local : `stripe listen --forward-to localhost:3000/api/billing/webhook`.
+4. Portail client (Paramètres → Billing → Customer portal) : activez la résiliation et la mise à jour de la carte.
+
 ## Autres variables
 
 | Variable | Rôle |

@@ -13,12 +13,19 @@ export async function apiFetch(path: string, body?: unknown, init: RequestInit =
   } catch {
     // pas de jeton disponible (session locale / hors ligne) : requête anonyme
   }
-  return fetch(path, {
+  const res = await fetch(path, {
     method: body !== undefined ? 'POST' : 'GET',
     ...init,
     headers,
     body: body !== undefined ? JSON.stringify(body) : init.body
   });
+  // Quota du forfait atteint : l'application propose de passer à Premium (voir UpgradeModal)
+  if (res.status === 402) {
+    res.clone().json().then((d) => {
+      if (d?.error === 'QUOTA_EXCEEDED') window.dispatchEvent(new CustomEvent('autopostule:quota', { detail: d }));
+    }).catch(() => {});
+  }
+  return res;
 }
 
 /** Lit la réponse JSON, ou lève une erreur lisible. */

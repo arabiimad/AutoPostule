@@ -3,7 +3,7 @@
  * Les liens deviennent partageables et les boutons Précédent / Suivant du navigateur fonctionnent.
  *   /?onglet=offres&q=développeur&lieu=Lyon&rayon=30&contrat=alternance&offre=ft-123
  */
-export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile';
+export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile' | 'pricing';
 
 const TAB_SLUGS: Record<TabId, string> = {
   radar: 'offres',
@@ -11,7 +11,8 @@ const TAB_SLUGS: Record<TabId, string> = {
   interview: 'entretiens',
   agent: 'assistant',
   latex: 'cv',
-  profile: 'profil'
+  profile: 'profil',
+  pricing: 'tarifs'
 };
 const SLUG_TABS = Object.fromEntries(Object.entries(TAB_SLUGS).map(([k, v]) => [v, k])) as Record<string, TabId>;
 

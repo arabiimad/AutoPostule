@@ -8,12 +8,15 @@ import { registerJobRoutes } from "./routes/jobs.ts";
 import { registerTailorRoutes } from "./routes/tailor.ts";
 import { registerLatexRoutes } from "./routes/latex.ts";
 import { registerInterviewRoutes } from "./routes/interview.ts";
+import { registerAccountRoutes, registerAccountApiRoutes } from "./routes/account.ts";
 
 /** Application Express (API seulement) : utilisée par server.ts et par les tests. */
 export function createApp(): Express {
   const app = express();
   // Un seul proxy devant l'application (Cloud Run / AI Studio) : req.ip = vraie IP du client
   app.set("trust proxy", 1);
+  // Webhook Stripe avant le décodage JSON (signature calculée sur le corps brut)
+  registerAccountRoutes(app);
   app.use(express.json({ limit: "12mb" }));
   app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 
@@ -21,6 +24,9 @@ export function createApp(): Express {
   const PROTECTED = ["/api/cv", "/api/tailor", "/api/interview", "/api/latex/compile"];
   // /api/cv/html et /api/cv/pdf : rendu sans IA → même limite large que /api/tailor/render
   app.use(PROTECTED, authMiddleware());
+  // Compte et abonnement : identification seulement (pas de limite IA)
+  app.use(["/api/account", "/api/billing/checkout", "/api/billing/portal"], authMiddleware());
+  app.use(["/api/account", "/api/billing"], createRateLimiter("account", 60, 60_000));
   // Mise en forme sans IA (/api/tailor/render) : appelée à chaque retouche, limite plus large
   const iaLimiter = createRateLimiter("ia", 30, 60_000);
   const renderLimiter = createRateLimiter("render", 150, 60_000);
@@ -36,6 +42,7 @@ export function createApp(): Express {
   registerTailorRoutes(app);
   registerLatexRoutes(app);
   registerInterviewRoutes(app);
+  registerAccountApiRoutes(app);
 
   // Erreurs non gérées sur /api
   app.use("/api", (err: any, req: any, res: any, next: any) => {

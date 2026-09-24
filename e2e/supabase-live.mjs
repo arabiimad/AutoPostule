@@ -93,6 +93,20 @@ try {
   await page.waitForTimeout(2000);
   rows = await (await admin(`/rest/v1/profiles?id=eq.${users[0].id}&select=data`)).json();
   check('CV importé : expériences et compétences en base', (rows[0]?.data?.experiences || []).length > 0 && (rows[0]?.data?.skills || []).includes('React'));
+  // Génération d'un CV par l'IA (faux Gemini) avec le jeton du compte → décomptée dans la table usage
+  const usageApi = await page.evaluate(async () => {
+    const k = Object.keys(localStorage).find((x) => x.startsWith('sb-') && x.endsWith('-auth-token'));
+    const token = k ? JSON.parse(localStorage.getItem(k)).access_token : '';
+    const h = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const candidate = { fullName: 'Karim Test', skills: ['React'], experiences: [{ id: 'exp-1', title: 'Développeur', company: 'Studio X', bullets: ['Développé des interfaces React'] }] };
+    const gen = await fetch('/api/tailor/latex', { method: 'POST', headers: h, body: JSON.stringify({ candidate, job: { title: 'Développeur React', company: 'ACME', description: 'React', skillsRequired: ['React'] } }) }).then((r) => r.json());
+    await new Promise((r) => setTimeout(r, 1500));
+    const usage = await fetch('/api/account/usage', { headers: h }).then((r) => r.json());
+    return { source: gen.source, usage };
+  });
+  const usageRows = await (await admin(`/rest/v1/usage?user_id=eq.${users[0].id}&select=kind,count`)).json();
+  check('quota : CV généré par l’IA décompté en base (table usage)', usageApi.source === 'gemini-pipeline' && usageRows.some((u) => u.kind === 'cv' && u.count === 1), JSON.stringify({ source: usageApi.source, usageRows }));
+  check('API /api/account/usage : forfait gratuit et consommation du compte', usageApi.usage.plan === 'free' && usageApi.usage.account === true && usageApi.usage.usage.cv === 1, JSON.stringify(usageApi.usage).slice(0, 200));
   check('API IA en mode « compte requis » : jeton accepté (analyse du CV)', !/401/.test(log) && rows[0]?.data?.experiences?.length > 0);
 
   // Sauvegarde d'une offre → ligne dans applications
@@ -141,6 +155,14 @@ try {
   check('RLS : impossible de s’attribuer le forfait Premium soi-même', bWrite.status >= 400, `statut ${bWrite.status}`);
   const anonRead = await (await fetch(`${SUPABASE_URL}/rest/v1/applications?select=id`, { headers: { apikey: SUPABASE_ANON_KEY } })).json();
   check('RLS : aucune donnée lisible sans connexion', Array.isArray(anonRead) && anonRead.length === 0);
+
+  // RGPD : export puis suppression du compte B par l'utilisateur lui-même (API du serveur)
+  const asBServer = (p, init = {}) => fetch(`${BASE}${p}`, { ...init, headers: { Authorization: `Bearer ${tok.access_token}` } });
+  const exp = await (await asBServer('/api/account/export')).json();
+  check('RGPD : export des données du compte', exp.account?.id === users[1].id && 'profile' in exp && Array.isArray(exp.applications), JSON.stringify(exp).slice(0, 160));
+  const del = await asBServer('/api/account', { method: 'DELETE' });
+  const gone = await admin(`/auth/v1/admin/users/${users[1].id}`);
+  check('RGPD : suppression du compte par l’utilisateur', del.status === 200 && gone.status === 404, `suppression ${del.status}, lecture ${gone.status}`);
 
   // Déconnexion
   await page.locator('header').getByRole('button', { name: /Karim|Compte|menu/i }).first().click().catch(() => {});

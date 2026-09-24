@@ -7,12 +7,13 @@ import { applyTailored, sanitizeTailored } from "../cvPipeline.ts";
 import { getGeminiClient, callGeminiResilient, extractJsonObject, MODEL_FAST } from "../ai.ts";
 import { hasItems } from "../fallbacks.ts";
 import { logEvent } from "../log.ts";
+import { requireQuota } from "../plans.ts";
 
 const SUPPORTED_AI_MIME = /^(application\/pdf|image\/(png|jpeg|webp))$/i;
 
 export function registerCvRoutes(app: Express) {
   // 0. Analyse du CV
-  app.post("/api/cv/analyze", async (req, res) => {
+  app.post("/api/cv/analyze", requireQuota("import"), async (req, res) => {
     const { fileBase64, mimeType, cvText } = req.body || {};
     const unreadable = (message: string) => res.status(422).json({ success: false, error: message });
 
@@ -142,6 +143,7 @@ RÈGLES D'OR ABSOLUES :
       if (effectiveText && effectiveText.trim().length > 30) {
         const fallbackParsed = parseCvSemantically(effectiveText);
         if (!isParsedCvEmpty(fallbackParsed)) {
+          res.locals.noCharge = true;
           return res.json({ success: true, source: "heuristic-parser", profile: fallbackParsed });
         }
       }

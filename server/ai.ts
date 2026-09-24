@@ -131,11 +131,13 @@ export function extractJsonObject(text: string): any | null {
 }
 
 /** Fonction d'appel à l'IA pour la chaîne de génération du CV ; `used` liste les modèles ayant répondu. */
-export function makeGenerate(ai: GoogleGenAI): { generate: GenerateFn; used: string[] } {
+export function makeGenerate(ai: GoogleGenAI, options: { allowBest?: boolean } = {}): { generate: GenerateFn; used: string[] } {
   const used: string[] = [];
+  const allowBest = options.allowBest !== false;
   const generate: GenerateFn = async (prompt, { quality, json }) => {
     const r: any = await callGeminiResilient(ai, {
-      preferredModel: quality === "best" ? MODEL_BEST : MODEL_FAST,
+      // Forfait gratuit : modèle rapide uniquement ; Premium : modèle le plus puissant pour la rédaction
+      preferredModel: quality === "best" && allowBest ? MODEL_BEST : MODEL_FAST,
       contents: prompt,
       config: json ? { responseMimeType: "application/json", temperature: quality === "best" ? 0.4 : 0.1 } : undefined
     });

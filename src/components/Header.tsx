@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, FileText, KanbanSquare, MessagesSquare, UserRound, LogOut, Bot, ChevronDown, Upload, Bell, Sun, Moon, Monitor } from 'lucide-react';
+import { Search, FileText, KanbanSquare, MessagesSquare, UserRound, LogOut, Bot, ChevronDown, Upload, Bell, Sun, Moon, Monitor, Sparkles } from 'lucide-react';
 import { getThemePref, setThemePref, type ThemePref } from '../utils/theme';
 import type { AppUser as User } from '../data/cloud';
 import { Button, cx } from './ui';
 
-export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile';
+export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile' | 'pricing';
 
 interface HeaderProps {
   currentTab: TabId;
@@ -22,6 +22,8 @@ interface HeaderProps {
   applicationsCount?: number;
   /** Nouvelles offres trouvées par les alertes. */
   alertsNewCount?: number;
+  /** Forfait actuel (null : inconnu). */
+  plan?: 'free' | 'premium' | null;
 }
 
 const THEME_CYCLE: ThemePref[] = ['system', 'light', 'dark'];
@@ -66,7 +68,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenCvUpload,
   followUpDueCount = 0,
   applicationsCount = 0,
-  alertsNewCount = 0
+  alertsNewCount = 0,
+  plan = null
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -142,6 +145,24 @@ export const Header: React.FC<HeaderProps> = ({
                 <Bell className="h-3.5 w-3.5" /> {followUpDueCount} à relancer
               </button>
             )}
+            {plan === 'premium' ? (
+              <button
+                onClick={() => setCurrentTab('pricing')}
+                className="hidden sm:flex items-center gap-1 rounded-full bg-brand-50 px-3 h-8 text-xs font-semibold text-brand-700 hover:bg-brand-100"
+                title="Votre forfait Premium"
+              >
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> Premium
+              </button>
+            ) : (
+              <button
+                onClick={() => setCurrentTab('pricing')}
+                className={cx('flex items-center gap-1 rounded-full px-2.5 sm:px-3 h-8 text-xs font-semibold', currentTab === 'pricing' ? 'bg-brand-600 text-white' : 'bg-brand-50 text-brand-700 hover:bg-brand-100')}
+                aria-current={currentTab === 'pricing' ? 'page' : undefined}
+                aria-label="Passer à Premium"
+              >
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> <span className="hidden sm:inline"><span className="hidden 2xl:inline">Passer </span>Premium</span>
+              </button>
+            )}
             {onOpenCvUpload && (
               <span className="hidden sm:block">
                 <Button variant="secondary" size="sm" onClick={onOpenCvUpload}>
@@ -176,6 +197,9 @@ export const Header: React.FC<HeaderProps> = ({
                     )}
                     <button role="menuitem" onClick={() => { setCurrentTab('profile'); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">
                       <UserRound className="h-4 w-4 text-slate-400" /> Mon profil
+                    </button>
+                    <button role="menuitem" onClick={() => { setCurrentTab('pricing'); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">
+                      <Sparkles className="h-4 w-4 text-slate-400" /> Abonnement et consommation
                     </button>
                     <div className="my-1 border-t border-slate-100" />
                     <button role="menuitem" onClick={() => { onLogout(); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50">

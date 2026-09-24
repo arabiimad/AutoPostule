@@ -5,10 +5,11 @@ import { tailorCv, applyTailored, sanitizeTailored, rewriteText, defaultTailored
 import { getGeminiClient, callGeminiResilient, extractJsonObject, makeGenerate, cachedOfferAnalysis, candidateBrief, isRateLimitOrQuotaError, MODEL_BEST, MODEL_FAST } from "../ai.ts";
 import { hasItems, generateFallbackLetter } from "../fallbacks.ts";
 import { logEvent } from "../log.ts";
+import { requireQuota } from "../plans.ts";
 
 export function registerTailorRoutes(app: Express) {
   // 3. CV LaTeX adapté
-  app.post("/api/tailor/latex", async (req, res) => {
+  app.post("/api/tailor/latex", requireQuota("cv"), async (req: any, res) => {
     const { candidate, job } = req.body || {};
     const template = normalizeTemplate(req.body?.template ?? candidate?.preferredTemplate);
 
@@ -21,7 +22,8 @@ export function registerTailorRoutes(app: Express) {
 
     const match = calculateCandidateMatch(candidate?.skills || [], job?.skillsRequired || []);
     const ai = getGeminiClient();
-    const gen = ai ? makeGenerate(ai) : null;
+    const premium = req.plan === "premium";
+    const gen = ai ? makeGenerate(ai, { allowBest: premium }) : null;
 
     // 1. Analyse de l'offre → 2. contenu adapté + garde-fous → 3. mise en forme par le modèle (jamais par l'IA)
     const analysis = await cachedOfferAnalysis(gen?.generate || null, job);
@@ -34,7 +36,8 @@ export function registerTailorRoutes(app: Express) {
     if (result.rejected.length) {
       notices.push(`${result.rejected.length} proposition(s) de l'IA écartée(s) car absentes de votre profil (${result.rejected.slice(0, 2).map((r) => r.reason).join(" ; ")}) : le texte d'origine est conservé.`);
     }
-    if (gen?.used.length && !gen.used.includes(MODEL_BEST) && result.source === "ai") {
+    if (result.source !== "ai") res.locals.noCharge = true; // pas d'IA utilisée : non décompté
+    if (premium && gen?.used.length && !gen.used.includes(MODEL_BEST) && result.source === "ai") {
       notices.push(`Rédigé avec ${gen.used[gen.used.length - 1]} (le modèle ${MODEL_BEST} n'est pas accessible avec cette clé : activez la facturation du projet Google Cloud pour l'utiliser).`);
     }
     logEvent("info", "cv_tailored", { source: result.source, models: gen?.used || [], rejected: result.rejected.length, analysis: analysis.source });
@@ -65,14 +68,14 @@ export function registerTailorRoutes(app: Express) {
   });
 
   // 3 ter. Retouche ciblée d'une puce, de l'accroche ou du titre
-  app.post("/api/tailor/rewrite", async (req, res) => {
+  app.post("/api/tailor/rewrite", requireQuota("rewrite"), async (req: any, res) => {
     const { candidate, job, text, instruction } = req.body || {};
     const kind = ["bullet", "summary", "headline"].includes(req.body?.kind) ? req.body.kind : "bullet";
     if (!String(text || "").trim()) return res.status(400).json({ success: false, error: "Texte à retoucher manquant." });
     const ai = getGeminiClient();
     if (!ai) return res.status(503).json({ success: false, error: "Service IA indisponible : modifiez le texte à la main." });
     try {
-      const { generate, used } = makeGenerate(ai);
+      const { generate, used } = makeGenerate(ai, { allowBest: req.plan === "premium" });
       const out = await rewriteText(generate, candidate, job, String(text), String(instruction || ""), kind);
       return res.json({
         success: true,
@@ -86,15 +89,15 @@ export function registerTailorRoutes(app: Express) {
   });
 
   // 4. Lettre de motivation
-  app.post("/api/tailor/letter", async (req, res) => {
+  app.post("/api/tailor/letter", requireQuota("letter"), async (req: any, res) => {
     const { candidate, job } = req.body || {};
-    const fallback = (reason: string) => res.json({ source: "standard-template", notice: reason, letter: generateFallbackLetter(candidate, job) });
+    const fallback = (reason: string) => (res.locals.noCharge = true, res).json({ source: "standard-template", notice: reason, letter: generateFallbackLetter(candidate, job) });
 
     const ai = getGeminiClient();
     if (!ai) return fallback("Service IA indisponible : lettre modèle à personnaliser.");
 
     try {
-      const { generate } = makeGenerate(ai);
+      const { generate } = makeGenerate(ai, { allowBest: req.plan === "premium" });
       // Même analyse que le CV (en cache) : lettre et CV mettent en avant les mêmes points
       const analysis = req.body?.analysis && typeof req.body.analysis === "object" ? req.body.analysis : await cachedOfferAnalysis(generate, job);
       const prompt = `Rédige une lettre de motivation en français, sur mesure, pour :
@@ -126,7 +129,7 @@ DIRECTIVES :
 - Ton direct, professionnel, sans formules creuses. 250 à 350 mots.
 - Renvoie UNIQUEMENT le texte de la lettre (de « Madame, Monsieur, » à la signature), sans titre, sans commentaire, sans markdown.`;
 
-      const response = await callGeminiResilient(ai, { preferredModel: MODEL_BEST, contents: prompt });
+      const response = await callGeminiResilient(ai, { preferredModel: req.plan === "premium" ? MODEL_BEST : MODEL_FAST, contents: prompt });
       const letter = (response.text || "").replace(/^```[a-z]*\n?|```$/g, "").trim();
       if (letter.length > 100) {
         return res.json({ source: "gemini-ai", letter });

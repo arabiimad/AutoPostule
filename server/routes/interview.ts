@@ -1,12 +1,13 @@
 import type { Express } from "express";
 import { getGeminiClient, callGeminiResilient, extractJsonObject, candidateBrief, MODEL_FAST } from "../ai.ts";
 import { generateFallbackPrepKit } from "../fallbacks.ts";
+import { requireQuota } from "../plans.ts";
 
 export function registerInterviewRoutes(app: Express) {
   // 5. Kit de préparation d'entretien
-  app.post("/api/interview/prep-kit", async (req, res) => {
+  app.post("/api/interview/prep-kit", requireQuota("interview"), async (req, res) => {
     const { candidate, job } = req.body || {};
-    const fallback = () => res.json({ source: "standard-coaching-model", ...generateFallbackPrepKit(candidate, job) });
+    const fallback = () => (res.locals.noCharge = true, res).json({ source: "standard-coaching-model", ...generateFallbackPrepKit(candidate, job) });
 
     const ai = getGeminiClient();
     if (!ai) return fallback();
@@ -58,9 +59,9 @@ Fournis 6 à 8 questions, dont au moins une sur chaque compétence manquante.`;
   });
 
   // 6. Évaluation d'une réponse d'entretien
-  app.post("/api/interview/evaluate-answer", async (req, res) => {
+  app.post("/api/interview/evaluate-answer", requireQuota("rewrite"), async (req, res) => {
     const { question, answer, jobTitle, company, candidate } = req.body || {};
-    const unavailable = (verdict: string) => res.json({
+    const unavailable = (verdict: string) => (res.locals.noCharge = true, res).json({
       source: "unavailable",
       score: null,
       verdict,
