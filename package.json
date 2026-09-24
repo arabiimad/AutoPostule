@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
+    "@sentry/node": "^11.0.0",
+    "@sentry/react": "^11.0.0",
     "@supabase/supabase-js": "^2.117.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/pdf-parse": "^1.1.5",
@@ -28,6 +30,7 @@
     "motion": "^12.23.24",
     "pdf-parse": "^2.4.5",
     "playwright": "^1.55.0",
+    "posthog-js": "^1.434.12",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^8.3.0"

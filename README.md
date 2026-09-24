@@ -102,6 +102,12 @@ Activer le paiement (Stripe) :
 3. Webhook (Développeurs → Webhooks) vers `https://votre-domaine/api/billing/webhook`, évènements `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted` : `STRIPE_WEBHOOK_SECRET=whsec_…`. En local : `stripe listen --forward-to localhost:3000/api/billing/webhook`.
 4. Portail client (Paramètres → Billing → Customer portal) : activez la résiliation et la mise à jour de la carte.
 
+## Mise en production
+
+- **Docker** : `docker build -t autopostule --build-arg VITE_SUPABASE_URL=… --build-arg VITE_SUPABASE_ANON_KEY=… .` puis `docker run -p 3000:3000 --env-file .env autopostule` (Chromium inclus pour les PDF). Compatible Render, Railway, Fly.io, Cloud Run, Scaleway.
+- **Suivi des erreurs** : `SENTRY_DSN` (serveur) et `VITE_SENTRY_DSN` (navigateur) ; les corps de requête (CV, profils) ne sont jamais envoyés.
+- **Mesure d'usage** : `VITE_POSTHOG_KEY` (PostHog UE, sans cookie, sans enregistrement de session) ; évènements : recherche, offre sauvegardée, candidature express, dossier validé, inscription, page Tarifs, quota atteint, paiement commencé.
+
 ## Autres variables
 
 | Variable | Rôle |

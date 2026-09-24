@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Check, Sparkles, CreditCard, Loader2, ShieldCheck } from 'lucide-react';
 import { Badge, Button, PageHeader, cx } from './ui';
+import { track } from '../utils/monitoring';
 import { PREMIUM_PRICE, QUOTA_LABELS, openBillingPortal, startCheckout, type AccountUsage, type QuotaKind } from '../data/account';
 
 interface PricingViewProps {
@@ -48,6 +49,7 @@ export const PricingView: React.FC<PricingViewProps> = ({ usage, signedIn, onOpe
       return;
     }
     setBusy(action);
+    track(action === 'checkout' ? 'checkout_started' : 'billing_portal_opened');
     try {
       await (action === 'checkout' ? startCheckout() : openBillingPortal());
     } catch (e: any) {

@@ -11,6 +11,7 @@ import { MasterProfileView } from './components/MasterProfileView';
 import { AuthModal } from './components/AuthModal';
 import { PricingView } from './components/PricingView';
 import { UpgradeModal } from './components/UpgradeModal';
+import { track, identifyUser } from './utils/monitoring';
 import { fetchUsage, QUOTA_EVENT, type AccountUsage, type QuotaEventDetail } from './data/account';
 import { CvUploadModal } from './components/CvUploadModal';
 import { EMPTY_PROFILE } from './mockData';
@@ -166,8 +167,14 @@ export default function App() {
     refreshUsage();
   }, [currentUser?.uid]);
   useEffect(() => {
-    if (currentTab === 'pricing') refreshUsage();
+    if (currentTab === 'pricing') {
+      refreshUsage();
+      track('pricing_viewed');
+    }
   }, [currentTab]);
+  useEffect(() => {
+    identifyUser(isCloudUser(currentUser) ? currentUser.uid : null, accountUsage?.plan);
+  }, [currentUser?.uid, accountUsage?.plan]);
   useEffect(() => {
     // Après un paiement, le webhook Stripe active Premium en quelques secondes
     if (paymentStatus !== 'ok') return;
@@ -176,7 +183,9 @@ export default function App() {
   }, [paymentStatus]);
   useEffect(() => {
     const onQuota = (e: Event) => {
-      setQuotaDetail((e as CustomEvent<QuotaEventDetail>).detail);
+      const detail = (e as CustomEvent<QuotaEventDetail>).detail;
+      setQuotaDetail(detail);
+      track('quota_exceeded', { kind: detail?.kind, plan: detail?.plan });
       refreshUsage();
     };
     window.addEventListener(QUOTA_EVENT, onQuota);
@@ -329,6 +338,7 @@ export default function App() {
         hasMore: !!data.hasMore
       });
       markSavedSearchSeen({ query, contractType, location, radius }, Array.isArray(data.jobs) ? data.jobs : []);
+      if (query) track('job_search', { results: Array.isArray(data.jobs) ? data.jobs.length : 0, contract: contractType, hasLocation: !!location });
     } catch (e: any) {
       if (searchId === lastSearchId.current) {
         showToast('Recherche indisponible', e?.message || 'La recherche a échoué. Réessayez.', true);
@@ -550,6 +560,7 @@ export default function App() {
 
   const handleUpdateAppStatus = async (appId: string, newStatus: ApplicationStatus) => {
     const app = applications.find(a => a.id === appId);
+    track('application_status', { status: newStatus });
     const patch: Partial<Application> = {
       status: newStatus,
       logEvents: [...(app?.logEvents || []), { timestamp: new Date().toLocaleString('fr-FR'), message: `Statut : ${STATUS_LABELS[newStatus]}` }]
@@ -631,6 +642,7 @@ export default function App() {
   /** Doit être appelé directement dans un gestionnaire de clic (ouverture du portail non bloquée). */
   const handleInstantAutoApply = async (job: JobOffer) => {
     if (!job || isAgentRunning) return;
+    track('express_apply', { spontaneous: !!job.isSpontaneous });
 
     // Contrôles synchrones AVANT toute attente
     const existing = findExistingApplication(job);
@@ -756,6 +768,7 @@ export default function App() {
     }
     const app = buildApplication(job, '', '', 'Offre sauvegardée.');
     await persistApplication({ ...app, status: 'detected' });
+    track('job_saved', { spontaneous: !!job.isSpontaneous });
     showToast('Offre sauvegardée', 'Retrouvez-la dans l’onglet Candidatures.');
   };
 
@@ -1092,6 +1105,7 @@ export default function App() {
           }
           if (isNewAccount) {
             // Le profil en ligne est créé au premier chargement du compte (nom et titre : métadonnées du compte)
+            track('signup');
             showToast('Compte créé', 'Déposez maintenant votre CV pour que vos informations soient extraites.');
           } else {
             showToast('Connexion réussie', 'Vos données sont synchronisées.');
@@ -1133,6 +1147,7 @@ export default function App() {
           }}
           onClose={() => { setSelectedJobForLatex(null); setSelectedAppForLatex(null); }}
           onApplyWithLatex={async (job, latexCode, coverLetter, template, tailored, analysis) => {
+            track('dossier_validated', { template, tailored: !!tailored });
             const existing = findExistingApplication(job);
             if (existing) {
               // Mise à jour du dossier existant (pas de doublon) ; l'ancienne version est archivée

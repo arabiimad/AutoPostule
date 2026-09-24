@@ -7,11 +7,13 @@ import { closeWebPdf } from "./server/pdf.ts";
 import { kv } from "./server/store.ts";
 import { getSourceStatus } from "./server/jobSources.ts";
 import { logEvent } from "./server/log.ts";
+import { initMonitoring, flushMonitoring } from "./server/monitoring.ts";
 
 // Port fourni par l'hébergeur (Cloud Run, Render…) ; 3000 en local
 const PORT = Number(process.env.PORT) || 3000;
 
 async function startServer() {
+  await initMonitoring();
   const app = createApp();
 
   // Production : NODE_ENV=production, ou serveur lancé depuis le bundle (npm start → dist/server.cjs)
@@ -46,7 +48,7 @@ async function startServer() {
     setTimeout(() => process.exit(0), 5000).unref();
     httpServer.close();
     httpServer.closeAllConnections?.();
-    closeWebPdf().catch(() => {}).finally(() => process.exit(0));
+    Promise.allSettled([closeWebPdf(), flushMonitoring()]).finally(() => process.exit(0));
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));

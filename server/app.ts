@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import { authMiddleware } from "./auth.ts";
 import { createRateLimiter } from "./rateLimit.ts";
 import { logEvent } from "./log.ts";
+import { captureError } from "./monitoring.ts";
 import { registerSystemRoutes } from "./routes/system.ts";
 import { registerCvRoutes } from "./routes/cv.ts";
 import { registerJobRoutes } from "./routes/jobs.ts";
@@ -47,6 +48,7 @@ export function createApp(): Express {
   // Erreurs non gérées sur /api
   app.use("/api", (err: any, req: any, res: any, next: any) => {
     logEvent("error", "api_unhandled", { path: req.path, message: String(err?.message || err) });
+    if (err?.type !== "entity.too.large") captureError(err, { path: req.path });
     if (res.headersSent) return next(err);
     const status = err.type === "entity.too.large" ? 413 : (err.status || 500);
     return res.status(status).json({

@@ -2,6 +2,8 @@
  * Remonte les erreurs JavaScript du navigateur au serveur (/api/client-errors), qui les journalise.
  * Dédoublonnage et plafond par session pour ne jamais inonder le serveur.
  */
+import { captureClientError } from './monitoring';
+
 const sent = new Set<string>();
 let count = 0;
 const MAX_PER_SESSION = 10;
@@ -24,16 +26,21 @@ function report(message: string, stack?: string) {
 }
 
 export function installErrorReporting() {
-  window.addEventListener('error', (e) => report(e.message || String(e.error), e.error?.stack));
+  window.addEventListener('error', (e) => {
+    report(e.message || String(e.error), e.error?.stack);
+    captureClientError(e.error || e.message);
+  });
   window.addEventListener('unhandledrejection', (e) => {
     const r: any = e.reason;
     // Les erreurs réseau attendues (hors ligne, requête annulée) ne sont pas des bugs
     if (r?.name === 'AbortError' || /Failed to fetch|NetworkError|Load failed/i.test(String(r?.message || r))) return;
     report(String(r?.message || r), r?.stack);
+    captureClientError(r);
   });
 }
 
 export function reportError(error: unknown) {
   const e: any = error;
   report(String(e?.message || e), e?.stack);
+  captureClientError(error);
 }
