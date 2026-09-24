@@ -1,0 +1,52 @@
+import express, { type Express } from "express";
+import { authMiddleware } from "./auth.ts";
+import { createRateLimiter } from "./rateLimit.ts";
+import { logEvent } from "./log.ts";
+import { registerSystemRoutes } from "./routes/system.ts";
+import { registerCvRoutes } from "./routes/cv.ts";
+import { registerJobRoutes } from "./routes/jobs.ts";
+import { registerTailorRoutes } from "./routes/tailor.ts";
+import { registerLatexRoutes } from "./routes/latex.ts";
+import { registerInterviewRoutes } from "./routes/interview.ts";
+
+/** Application Express (API seulement) : utilisée par server.ts et par les tests. */
+export function createApp(): Express {
+  const app = express();
+  // Un seul proxy devant l'application (Cloud Run / AI Studio) : req.ip = vraie IP du client
+  app.set("trust proxy", 1);
+  app.use(express.json({ limit: "12mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "12mb" }));
+
+  // Vérification du compte (AUTH_MODE) puis limite de débit : 30 appels IA / minute par compte ou par IP
+  const PROTECTED = ["/api/cv", "/api/tailor", "/api/interview", "/api/latex/compile"];
+  // /api/cv/html et /api/cv/pdf : rendu sans IA → même limite large que /api/tailor/render
+  app.use(PROTECTED, authMiddleware());
+  // Mise en forme sans IA (/api/tailor/render) : appelée à chaque retouche, limite plus large
+  const iaLimiter = createRateLimiter("ia", 30, 60_000);
+  const renderLimiter = createRateLimiter("render", 150, 60_000);
+  app.use(PROTECTED, (req: any, res: any, next: any) =>
+    (/^\/api\/(tailor\/render|cv\/html|cv\/pdf)/.test(String(req.originalUrl)) ? renderLimiter : iaLimiter)(req, res, next));
+  // Recherche d'offres : quotas des API partenaires (60/min pour La bonne alternance), résultats en cache
+  app.use("/api/jobs", createRateLimiter("jobs", 40, 60_000));
+  app.use("/api/client-errors", createRateLimiter("errors", 20, 60_000));
+
+  registerSystemRoutes(app);
+  registerCvRoutes(app);
+  registerJobRoutes(app);
+  registerTailorRoutes(app);
+  registerLatexRoutes(app);
+  registerInterviewRoutes(app);
+
+  // Erreurs non gérées sur /api
+  app.use("/api", (err: any, req: any, res: any, next: any) => {
+    logEvent("error", "api_unhandled", { path: req.path, message: String(err?.message || err) });
+    if (res.headersSent) return next(err);
+    const status = err.type === "entity.too.large" ? 413 : (err.status || 500);
+    return res.status(status).json({
+      success: false,
+      error: status === 413 ? "Fichier trop volumineux (8 Mo maximum)." : (err.message || "Une erreur est survenue.")
+    });
+  });
+
+  return app;
+}
