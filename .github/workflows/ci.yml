@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  verifier:
+    name: Types, tests, build et parcours navigateur
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Dépendances
+        run: npm ci
+
+      - name: Vérification des types
+        run: npm run lint
+
+      - name: Tests unitaires
+        run: npm test
+
+      - name: Build (interface + serveur)
+        run: npm run build
+
+      - name: Navigateur pour les tests de bout en bout
+        run: npx playwright install --with-deps chromium
+
+      - name: Tests de bout en bout (sources simulées)
+        run: npm run test:e2e

@@ -1,0 +1,87 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Candidat profile data, master resume and automation preferences.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "fullName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "title": { "type": "string" },
+        "phone": { "type": "string" },
+        "location": { "type": "string" },
+        "linkedinUrl": { "type": "string" },
+        "githubUrl": { "type": "string" },
+        "portfolioUrl": { "type": "string" },
+        "summary": { "type": "string" },
+        "skills": { "type": "array" },
+        "experiences": { "type": "array" },
+        "education": { "type": "array" },
+        "projects": { "type": "array" },
+        "autoApplyEnabled": { "type": "boolean" },
+        "minMatchScore": { "type": "number" },
+        "preferredTemplate": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["userId", "fullName", "email"]
+    },
+    "Application": {
+      "title": "Application",
+      "description": "Individual job application tracked by candidate with tailored LaTeX CV, cover letter, and interview prep.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "jobTitle": { "type": "string" },
+        "company": { "type": "string" },
+        "location": { "type": "string" },
+        "contractType": { "type": "string" },
+        "jobUrl": { "type": "string" },
+        "matchScore": { "type": "number" },
+        "status": { "type": "string" },
+        "latexResumeCode": { "type": "string" },
+        "coverLetter": { "type": "string" },
+        "overleafSnippetUrl": { "type": "string" },
+        "interviewPrep": { "type": "object" },
+        "appliedAt": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "jobTitle", "company", "status"]
+    },
+    "JobOffer": {
+      "title": "JobOffer",
+      "description": "Ingested job offer discovered via feeds, APIs, and search.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "company": { "type": "string" },
+        "location": { "type": "string" },
+        "contractType": { "type": "string" },
+        "description": { "type": "string" },
+        "skillsRequired": { "type": "array" },
+        "source": { "type": "string" },
+        "applyUrl": { "type": "string" },
+        "publishedAt": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "company", "applyUrl"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile with master resume details and auto-apply preferences"
+    },
+    "/users/{userId}/applications/{applicationId}": {
+      "schema": "Application",
+      "description": "Candidate specific applications with tailored LaTeX and interview prep"
+    },
+    "/jobs/{jobId}": {
+      "schema": "JobOffer",
+      "description": "Public pool of ingested and live-scraped job offers"
+    }
+  }
+}

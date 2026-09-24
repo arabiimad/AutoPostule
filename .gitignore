@@ -1,0 +1,17 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+.dev-tmp/
+test-results/
+_backup*/
+.antigravity/
+.vscode/
+*.pem
+*.key
+*service-account*.json
+*serviceAccount*.json
