@@ -215,9 +215,6 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
                       </span>
                       <p className="min-w-0 basis-full break-words leading-relaxed sm:basis-auto sm:flex-1">
                         {log.message}
-                        {typeof log.score === 'number' && (
-                          <span className="text-emerald-700 font-semibold ml-1">({log.score} % de compatibilité)</span>
-                        )}
                       </p>
                     </div>
                   );

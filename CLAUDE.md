@@ -1,4 +1,4 @@
-# AutoPostule — contexte pour Claude Code
+# Kareer — contexte pour Claude Code
 
 Application commerciale (freemium) d'aide à la recherche d'emploi et d'alternance : recherche d'offres multi-sources, CV et lettre adaptés par l'IA, suivi des candidatures, préparation d'entretien. Cible : candidats francophones de tous métiers (pas seulement la tech), souvent peu à l'aise avec l'informatique, souvent sur mobile.
 

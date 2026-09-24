@@ -80,7 +80,7 @@ try {
 
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1200);
-  check('premiers pas affichés au premier lancement', await page.getByText('Bienvenue sur AutoPostule').isVisible());
+  check('premiers pas affichés au premier lancement', await page.getByText('Bienvenue sur Kareer').isVisible());
 
   // Import du CV (texte collé)
   await page.getByRole('button', { name: /Importer mon CV/ }).first().click();
@@ -89,7 +89,7 @@ try {
   await page.getByRole('button', { name: /Analyser mon CV/ }).click();
   await page.getByRole('button', { name: /Confirmer et enregistrer/ }).click({ timeout: 15000 });
   await page.getByRole('button', { name: /Voir les offres/ }).click();
-  check('profil enregistré (premiers pas masqués)', !(await page.getByText('Bienvenue sur AutoPostule').isVisible()));
+  check('profil enregistré (premiers pas masqués)', !(await page.getByText('Bienvenue sur Kareer').isVisible()));
 
   // Recherche
   await page.getByLabel('Métier ou mot-clé').fill('développeur');
@@ -100,7 +100,8 @@ try {
   check('8 résultats multi-sources (6 offres + 2 entreprises)', /8\s*offres autour de Avignon/.test(body), body.match(/\d+\s*offres?[^.]{0,40}/)?.[0]);
   check('recherche inscrite dans l’URL', /q=d%C3%A9veloppeur/.test(page.url()) && /lieu=Avignon/.test(page.url()));
   check('fiche détaillée ouverte', (await page.locator('aside h2').count()) === 1);
-  check('score de compatibilité affiché', (await page.locator('article svg text').count()) > 0);
+  check('sans compte : ni pourcentage ni jauge d’adéquation', (await page.locator('article svg text').count()) === 0 && !/% de compatibilit|Adéquation (forte|moyenne|faible)/.test(await page.textContent('main')));
+  check('sans compte : invitation à créer un compte pour voir l’adéquation', await page.getByText('Connectez-vous pour savoir si cette offre correspond').isVisible());
 
   // Candidatures spontanées
   await page.getByLabel('Type').selectOption('spontanees');
@@ -226,6 +227,21 @@ try {
   }
   const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   check('mode sombre', await page.evaluate(() => document.documentElement.classList.contains('dark')) && bg !== 'rgb(246, 247, 249)', bg);
+
+  // « Adapter mon CV à une offre trouvée ailleurs » (offre collée)
+  await page.goto(`${BASE}/?onglet=cv`);
+  await page.waitForTimeout(1000);
+  await page.getByLabel('Texte de l’offre').fill(`Développeur React H/F\nNous recherchons un développeur React et Node.js pour concevoir des interfaces accessibles et des API REST. Vous travaillerez avec TypeScript et Docker au sein d'une équipe produit. Merci d'envoyer votre CV au format Word.`);
+  await page.getByRole('button', { name: /Voir quoi changer dans mon CV/ }).click();
+  await page.getByText(/Modifications proposées/).waitFor({ timeout: 20000 }).catch(() => {});
+  const matchText = await page.textContent('main');
+  check('offre collée : mots-clés classés et modifications proposées', /Déjà dans votre CV/.test(matchText) && /Modifications proposées \(\d+\)/.test(matchText) && !/Pack Office/.test(matchText), matchText.slice(0, 200));
+  await page.screenshot({ path: path.join(outDir, 'offre-collee.png'), fullPage: true }).catch(() => null);
+  await page.getByRole('button', { name: /Appliquer dans le Studio/ }).click();
+  await page.waitForTimeout(800);
+  check('offre collée : ouverture du Studio avec le contenu adapté', await page.getByRole('tab', { name: 'Contenu' }).isVisible() && (await page.getByLabel('Titre du CV').inputValue()).length > 0);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
 
   await page.goto(`${BASE}/?onglet=tarifs`);
   await page.waitForTimeout(1200);

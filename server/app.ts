@@ -10,6 +10,7 @@ import { registerTailorRoutes } from "./routes/tailor.ts";
 import { registerLatexRoutes } from "./routes/latex.ts";
 import { registerInterviewRoutes } from "./routes/interview.ts";
 import { registerAccountRoutes, registerAccountApiRoutes } from "./routes/account.ts";
+import { registerToolRoutes } from "./routes/tools.ts";
 
 /** Application Express (API seulement) : utilisée par server.ts et par les tests. */
 export function createApp(): Express {
@@ -22,7 +23,7 @@ export function createApp(): Express {
   app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 
   // Vérification du compte (AUTH_MODE) puis limite de débit : 30 appels IA / minute par compte ou par IP
-  const PROTECTED = ["/api/cv", "/api/tailor", "/api/interview", "/api/latex/compile"];
+  const PROTECTED = ["/api/cv", "/api/tailor", "/api/interview", "/api/latex/compile", "/api/tools"];
   // /api/cv/html et /api/cv/pdf : rendu sans IA → même limite large que /api/tailor/render
   app.use(PROTECTED, authMiddleware());
   // Compte et abonnement : identification seulement (pas de limite IA)
@@ -44,6 +45,7 @@ export function createApp(): Express {
   registerLatexRoutes(app);
   registerInterviewRoutes(app);
   registerAccountApiRoutes(app);
+  registerToolRoutes(app);
 
   // Erreurs non gérées sur /api
   app.use("/api", (err: any, req: any, res: any, next: any) => {

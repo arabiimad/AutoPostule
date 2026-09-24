@@ -116,9 +116,14 @@ try {
   await page.getByLabel('Lieu', { exact: true }).fill('Avignon');
   await page.getByLabel('Lieu', { exact: true }).press('Enter');
   await page.waitForTimeout(1500);
+  const mainText = await page.textContent('main');
+  check('connecté : adéquation affichée (niveau, sans pourcentage)', /Adéquation (forte|moyenne|faible)/.test(mainText) && !/% de compatibilit/.test(mainText));
   await page.locator('article', { hasText: 'Front-End React' }).locator('button[aria-label^="Sauvegarder"]').click();
-  await page.waitForTimeout(2000);
-  const apps = await (await admin(`/rest/v1/applications?user_id=eq.${users[0].id}&select=id,status,data`)).json();
+  let apps = [];
+  for (let i = 0; i < 12 && !apps.length; i++) {
+    await page.waitForTimeout(500);
+    apps = await (await admin(`/rest/v1/applications?user_id=eq.${users[0].id}&select=id,status,data`)).json();
+  }
   check('offre sauvegardée : candidature en base', apps.length === 1 && apps[0].status === 'detected', JSON.stringify(apps).slice(0, 200));
 
   // Changement de statut depuis la base (autre appareil) → visible dans l'interface (temps réel)

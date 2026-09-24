@@ -1,4 +1,4 @@
-# AutoPostule
+# Kareer
 
 Recherche d'offres multi-sources, CV LaTeX et lettre adaptés à chaque offre, suivi des candidatures, relances et préparation aux entretiens.
 
@@ -97,7 +97,7 @@ Comptes (e-mail + mot de passe, Google en option), profils et candidatures sont 
 - **Profil → Mes données** : export JSON de toutes les données et suppression définitive du compte (RGPD).
 
 Activer le paiement (Stripe) :
-1. Créez un compte Stripe (mode test pour commencer), puis un produit « AutoPostule Premium » avec un tarif récurrent mensuel : `STRIPE_PRICE_PREMIUM=price_…`.
+1. Créez un compte Stripe (mode test pour commencer), puis un produit « Kareer Premium » avec un tarif récurrent mensuel : `STRIPE_PRICE_PREMIUM=price_…`.
 2. `STRIPE_SECRET_KEY=sk_test_…` (Développeurs → Clés API).
 3. Webhook (Développeurs → Webhooks) vers `https://votre-domaine/api/billing/webhook`, évènements `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted` : `STRIPE_WEBHOOK_SECRET=whsec_…`. En local : `stripe listen --forward-to localhost:3000/api/billing/webhook`.
 4. Portail client (Paramètres → Billing → Customer portal) : activez la résiliation et la mise à jour de la carte.

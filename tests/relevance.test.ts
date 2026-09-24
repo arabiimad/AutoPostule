@@ -29,3 +29,19 @@ test('proximité métier : maçon éloigné d’un profil informatique, dévelop
   // Métier différent mais compétence demandée présente : pas « éloigné »
   assert.equal(isFarFromProfile(chefProjet, { title: 'Analyste données', skillsRequired: ['SQL'] }), false);
 });
+
+import { assessFit } from '../src/utils/skillMatcher.ts';
+
+test('adéquation : niveau expliqué, jamais optimiste sans information', () => {
+  const dev = { title: 'Développeur full stack', skills: ['React', 'Node.js', 'SQL'], experiences: [{ title: 'Développeur web' }] };
+  const strong = assessFit(dev, { title: 'Développeur React H/F', skillsRequired: ['React', 'Node.js', 'TypeScript'] });
+  assert.equal(strong.level, 'forte');
+  assert.ok(strong.reasons.some((r) => /Métier proche/.test(r)) && strong.reasons.some((r) => /2 compétences demandées sur 3/.test(r)), strong.reasons.join(' | '));
+  assert.equal(assessFit(dev, { title: 'Maçon traditionnel N3 (H/F)', skillsRequired: [] }).level, 'faible');
+  // Offre sans compétences listées mais même métier : moyenne (pas forte)
+  assert.equal(assessFit(dev, { title: 'Développeur', skillsRequired: [] }).level, 'moyenne');
+  // Profil vide : pas de niveau
+  assert.equal(assessFit({ skills: [] }, { title: 'Développeur', skillsRequired: ['React'] }).level, null);
+  // Métier différent, une seule compétence commune : non évaluable plutôt qu'un faux 100 %
+  assert.equal(assessFit(dev, { title: 'Comptable', skillsRequired: ['SQL'] }).level, null);
+});
