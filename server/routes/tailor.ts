@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { calculateCandidateMatch } from "../../src/utils/skillMatcher.ts";
 import { generateFallbackLatex, normalizeTemplate } from "../latex.ts";
 import { tailorCv, applyTailored, sanitizeTailored, rewriteText, defaultTailored } from "../cvPipeline.ts";
-import { getGeminiClient, callGeminiResilient, extractJsonObject, makeGenerate, cachedOfferAnalysis, candidateBrief, isRateLimitOrQuotaError, MODEL_BEST, MODEL_FAST } from "../ai.ts";
+import { friendlyAiError, getGeminiClient, callGeminiResilient, extractJsonObject, makeGenerate, cachedOfferAnalysis, candidateBrief, isRateLimitOrQuotaError, MODEL_BEST, MODEL_FAST } from "../ai.ts";
 import { hasItems, generateFallbackLetter } from "../fallbacks.ts";
 import { logEvent } from "../log.ts";
 import { requireQuota } from "../plans.ts";
@@ -32,13 +32,18 @@ export function registerTailorRoutes(app: Express) {
 
     const notices: string[] = [];
     if (!ai) notices.push("Service IA indisponible : CV construit à partir de votre profil, sans reformulation.");
-    else if (result.source !== "ai") notices.push(`Adaptation IA impossible (${result.error || "erreur"}) : CV construit à partir de votre profil.`);
+    else if (result.source !== "ai") {
+      // Détail technique dans les journaux uniquement ; message clair à l'écran
+      logEvent("warn", "cv_tailoring_failed", { message: String(result.error || "").slice(0, 300) });
+      notices.push(`Adaptation par l'IA indisponible (${friendlyAiError(result.error)}) : votre CV a été construit à partir de votre profil, sans reformulation. Vous pouvez réessayer dans quelques minutes avec « Régénérer avec l'IA ».`);
+    }
     if (result.rejected.length) {
       notices.push(`${result.rejected.length} proposition(s) de l'IA écartée(s) car absentes de votre profil (${result.rejected.slice(0, 2).map((r) => r.reason).join(" ; ")}) : le texte d'origine est conservé.`);
     }
     if (result.source !== "ai") res.locals.noCharge = true; // pas d'IA utilisée : non décompté
     if (premium && gen?.used.length && !gen.used.includes(MODEL_BEST) && result.source === "ai") {
-      notices.push(`Rédigé avec ${gen.used[gen.used.length - 1]} (le modèle ${MODEL_BEST} n'est pas accessible avec cette clé : activez la facturation du projet Google Cloud pour l'utiliser).`);
+      // Problème de configuration (facturation) : pour l'exploitant, pas pour l'utilisateur
+      logEvent("warn", "premium_model_unavailable", { model: MODEL_BEST, used: gen.used[gen.used.length - 1] });
     }
     logEvent("info", "cv_tailored", { source: result.source, models: gen?.used || [], rejected: result.rejected.length, analysis: analysis.source });
 
@@ -84,7 +89,7 @@ export function registerTailorRoutes(app: Express) {
         rejected: out.rejected ? `Proposition écartée : ${out.rejected}. Le texte d'origine est conservé.` : undefined
       });
     } catch (e: any) {
-      return res.status(502).json({ success: false, error: isRateLimitOrQuotaError(e) ? "Quota IA atteint : réessayez plus tard." : "Le service IA n'a pas répondu. Réessayez." });
+      return res.status(502).json({ success: false, error: isRateLimitOrQuotaError(e) ? "Le service d’IA est saturé pour le moment : réessayez dans quelques minutes." : "Le service IA n'a pas répondu. Réessayez." });
     }
   });
 
@@ -136,7 +141,7 @@ DIRECTIVES :
       }
       return fallback("Réponse IA vide : lettre modèle à personnaliser.");
     } catch (e: any) {
-      return fallback(isRateLimitOrQuotaError(e) ? "Quota IA atteint : lettre modèle à personnaliser." : "Service IA en erreur : lettre modèle à personnaliser.");
+      return fallback(isRateLimitOrQuotaError(e) ? "Le service d’IA est saturé pour le moment : voici une lettre type à personnaliser." : "Le service d’IA n’a pas répondu : voici une lettre type à personnaliser.");
     }
   });
 

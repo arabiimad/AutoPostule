@@ -169,3 +169,16 @@ Expériences : ${JSON.stringify(exps)}
 Formations : ${JSON.stringify(edu)}
 Langues : ${JSON.stringify(candidate?.languages || [])}`;
 }
+
+/**
+ * Message lisible par l'utilisateur à partir d'une erreur du fournisseur d'IA
+ * (jamais de JSON brut, de nom de modèle ni de lien technique à l'écran).
+ */
+export function friendlyAiError(error: unknown): string {
+  const raw = String((error as any)?.message || (error as any)?.status || error || "");
+  if (/429|RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(raw)) return "le service d'IA a atteint sa limite d'utilisation pour le moment";
+  if (/503|UNAVAILABLE|overloaded|high demand/i.test(raw)) return "le service d'IA est momentanément surchargé";
+  if (/timeout|TIMEOUT|ETIMEDOUT|aborted/i.test(raw)) return "le service d'IA a mis trop de temps à répondre";
+  if (/401|403|API key|PERMISSION_DENIED|billing/i.test(raw)) return "le service d'IA n'est pas accessible avec la configuration actuelle";
+  return "le service d'IA n'a pas pu traiter la demande";
+}
