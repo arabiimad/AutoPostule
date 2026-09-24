@@ -10,11 +10,13 @@ import {
   Link as LinkIcon,
   CheckCircle2,
   UserRound,
+  Camera,
   X
 } from 'lucide-react';
 import { UserProfile, ContractType } from '../types';
 import { User } from 'firebase/auth';
 import { Button, PageHeader, cx } from './ui';
+import { photoFileError, squareJpegPhoto } from '../utils/photo';
 
 interface MasterProfileViewProps {
   userProfile: UserProfile;
@@ -36,6 +38,8 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
   const [profile, setProfile] = useState<UserProfile>(userProfile);
   const [newSkill, setNewSkill] = useState('');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const photoInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setProfile(userProfile);
@@ -59,6 +63,22 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
       ...prev,
       skills: prev.skills.filter(s => s !== skillToRemove)
     }));
+  };
+
+  const handlePhotoFile = async (file?: File) => {
+    setPhotoError(null);
+    if (!file) return;
+    const error = photoFileError(file);
+    if (error) {
+      setPhotoError(error);
+      return;
+    }
+    try {
+      const photo = await squareJpegPhoto(file);
+      setProfile(prev => ({ ...prev, photo }));
+    } catch {
+      setPhotoError('Impossible de lire cette image : essayez une autre photo.');
+    }
   };
 
   const handleToggleContract = (contract: ContractType) => {
@@ -177,6 +197,37 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
               <UserRound className="h-4 w-4 text-brand-600" aria-hidden="true" />
               Coordonnées
             </h2>
+            <div className="flex items-center gap-4">
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100 ring-1 ring-slate-200">
+                {profile.photo
+                  ? <img src={profile.photo} alt="Votre photo de CV" className="h-full w-full object-cover" />
+                  : <UserRound className="h-7 w-7 text-slate-400" aria-hidden="true" />}
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="secondary" onClick={() => photoInputRef.current?.click()}>
+                    <Camera className="h-3.5 w-3.5" aria-hidden="true" />
+                    {profile.photo ? 'Changer la photo' : 'Ajouter une photo'}
+                  </Button>
+                  {profile.photo && (
+                    <Button type="button" size="sm" variant="ghost" onClick={() => { setProfile(prev => ({ ...prev, photo: '' })); setPhotoError(null); }}>
+                      Retirer
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500">Facultative. Affichée seulement sur les CV « Photo » et « Créatif ». Jamais envoyée à l’IA.</p>
+              </div>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="sr-only"
+                tabIndex={-1}
+                aria-label="Choisir une photo de CV"
+                onChange={(e) => { handlePhotoFile(e.target.files?.[0]); e.target.value = ''; }}
+              />
+            </div>
+            {photoError && <p role="alert" className="text-sm text-rose-700">{photoError}</p>}
             <div className="space-y-3">
               {field('fullName', 'Nom complet', { autoComplete: 'name' })}
               {field('title', 'Poste recherché', { autoComplete: 'organization-title' })}

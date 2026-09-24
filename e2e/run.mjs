@@ -142,6 +142,16 @@ try {
   body = await page.textContent('body');
   check('suivi : 2 candidatures', /Suivies\s*2/.test(body), body.match(/Suivies\s*\d+/)?.[0] || page.url());
 
+  // Photo de CV (facultative) dans le profil
+  await page.locator('header nav button', { hasText: 'Profil' }).click();
+  await page.getByLabel('Choisir une photo de CV').setInputFiles(path.join(root, 'tests', 'fixtures', 'photo.jpg'));
+  await page.waitForTimeout(500);
+  check('photo ajoutée au profil', await page.getByAltText('Votre photo de CV').isVisible());
+  await page.getByRole('button', { name: /^Enregistrer$/ }).first().click();
+  await page.waitForTimeout(500);
+  await page.locator('header nav button', { hasText: 'Candidatures' }).click();
+  await page.waitForTimeout(400);
+
   // Studio : nouveau modèle → version archivée
   await page.getByRole('button', { name: /Voir le CV et la lettre/ }).first().click();
   await page.waitForTimeout(1000);
@@ -163,6 +173,19 @@ try {
   await page.getByRole('button', { name: /Compact/ }).first().click();
   await page.waitForTimeout(1200);
   check('changement de modèle sans perdre le contenu', (await page.getByLabel('Code source LaTeX du CV').inputValue()).includes('10pt') && (await page.getByLabel('Code source LaTeX du CV').inputValue()).includes('Titre modifié e2e'));
+  await page.getByRole('button', { name: 'Créatif', exact: true }).click();
+  await page.waitForTimeout(1200);
+  const creatif = await page.getByLabel('Code source LaTeX du CV').inputValue();
+  check('modèle Créatif : bandeau, pastilles, photo du profil', creatif.includes('\\fill[primary]') && creatif.includes('\\chip{') && creatif.includes('photo.jpg') && creatif.includes('Titre modifié e2e'));
+  await page.getByRole('tab', { name: 'Lettre de motivation' }).click();
+  const [letterTex] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Lettre .tex' }).click()]);
+  const letterCode = fs.readFileSync(await letterTex.path(), 'utf8');
+  check('lettre mise en page (expéditeur, objet, signature)', /Objet : Candidature/.test(letterCode) && /Karim Dupont/.test(letterCode) && /fill\[primary\]/.test(letterCode));
+  if (await page.getByRole('button', { name: 'Lettre en PDF' }).count()) {
+    const [letterPdf] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.getByRole('button', { name: 'Lettre en PDF' }).click()]);
+    check('lettre en PDF', fs.readFileSync(await letterPdf.path()).subarray(0, 4).toString() === '%PDF');
+  }
+  await page.getByRole('tab', { name: 'Code LaTeX' }).click();
   if (/pdflatex|tectonic/.test(serverLog) || await page.getByRole('tab', { name: 'Aperçu' }).count()) {
     await page.getByRole('tab', { name: 'Aperçu' }).click();
     await page.waitForSelector('iframe[title="Aperçu du CV (PDF)"]', { timeout: 30000 }).catch(() => null);

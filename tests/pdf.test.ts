@@ -1,6 +1,9 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderCvHtml, generatePdfFromHtml, getSectorColor, escapeHtml } from '../server/pdf.ts';
+import { renderCvHtml, generatePdfFromHtml, getSectorColor, escapeHtml, closeBrowser } from '../server/pdf.ts';
+
+// Le navigateur partagé garderait le processus de test ouvert
+after(() => closeBrowser());
 
 const candidate = {
   fullName: 'Sarah Benali <script>',

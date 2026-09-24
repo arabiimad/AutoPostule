@@ -32,6 +32,7 @@ import { readTab, readSearch, writeTab, writeUrl, type TabId, type SearchUrlStat
 import { FollowUpModal } from './components/FollowUpModal';
 import { calculateCandidateMatch } from './utils/skillMatcher';
 import { getApplyUrl } from './utils/jobLinks';
+import { normalizeCvTemplate } from './utils/templates';
 import {
   FileCode2,
   Award,
@@ -569,7 +570,7 @@ export default function App() {
   // Préparation d'un dossier (CV + lettre) et ouverture du portail
   // -------------------------------------------------------------------------
   const preferredTemplate = (): CvTemplate =>
-    userProfile.preferredTemplate === 'moderncv' || userProfile.preferredTemplate === 'compact' ? userProfile.preferredTemplate : 'article';
+    normalizeCvTemplate(userProfile.preferredTemplate);
 
   const generateDossier = async (job: JobOffer) => {
     // CV et lettre générés en parallèle (avant : l'un après l'autre)

@@ -12,10 +12,19 @@ async function getBrowser(): Promise<Browser> {
   if (!browserInstance || !browserInstance.isConnected()) {
     browserInstance = await chromium.launch({
       headless: true,
+      // Chromium déjà installé (même convention que les tests de bout en bout)
+      executablePath: process.env.PW_CHROMIUM_PATH || undefined,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
     });
   }
   return browserInstance;
+}
+
+/** Ferme le navigateur partagé (fin des tests, arrêt du serveur). */
+export async function closeBrowser(): Promise<void> {
+  const b = browserInstance;
+  browserInstance = null;
+  if (b) await b.close().catch(() => {});
 }
 
 export function escapeHtml(str: string): string {
@@ -65,7 +74,7 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
     candidate?.portfolioUrl ? { url: candidate.portfolioUrl, label: "Portfolio" } : null
   ].filter(Boolean) as { url: string; label: string }[];
 
-  const experiences = (hasItems(candidate?.experiences) ? candidate.experiences : []).map((exp: any) => ({
+  const experiences: { company: string; role: string; location: string; dates: string; bullets: { bold?: string; text: string }[] }[] = (hasItems(candidate?.experiences) ? candidate.experiences : []).map((exp: any) => ({
     company: clean(exp.company),
     role: clean(exp.title),
     location: clean(exp.location),
@@ -76,7 +85,7 @@ export function renderCvHtml(candidate: any, job: any, template: CvTemplate = "a
     })
   }));
 
-  const education = (hasItems(candidate?.education) ? candidate.education : []).map((e: any) => ({
+  const education: { year: string; degree: string; institution: string }[] = (hasItems(candidate?.education) ? candidate.education : []).map((e: any) => ({
     year: clean(e.year),
     degree: clean(e.degree),
     institution: clean(e.institution)
@@ -423,7 +432,7 @@ export async function generatePdfFromHtml(html: string): Promise<Buffer> {
   try {
     await page.setContent(html, { waitUntil: "domcontentloaded" });
     // Donnez un bref instant pour le calcul de mise en page
-    await page.evaluate(() => document.fonts ? document.fonts.ready : Promise.resolve());
+    await page.evaluate(async () => { if (document.fonts) await document.fonts.ready; });
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,

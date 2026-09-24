@@ -16,6 +16,7 @@ import { calculateCandidateMatch, candidateHasSkill } from '../utils/skillMatche
 import { CvContentEditor } from './studio/CvContentEditor';
 import { getApplyUrl } from '../utils/jobLinks';
 import { apiFetch } from '../utils/api';
+import { normalizeCvTemplate, PHOTO_TEMPLATES } from '../utils/templates';
 import { Badge, Button, Card, EmptyState, MatchRing, Modal, Tabs, cx } from './ui';
 
 interface LatexStudioModalProps {
@@ -36,12 +37,14 @@ interface LatexStudioModalProps {
 }
 
 const TEMPLATE_OPTIONS: { id: CvTemplate; label: string; hint: string }[] = [
-  { id: 'article', label: 'Classique', hint: 'Sobre, une colonne' },
-  { id: 'moderncv', label: 'Moderne', hint: 'Classe moderncv, dates en marge' },
+  { id: 'article', label: 'Classique', hint: 'Sobre, une colonne, sans photo' },
+  { id: 'photo', label: 'Photo', hint: 'Épuré, avec votre photo en haut à droite' },
+  { id: 'creatif', label: 'Créatif', hint: 'Bandeau de couleur et photo ronde, lisible par les logiciels de recrutement' },
+  { id: 'moderncv', label: 'Moderne', hint: 'Dates en marge' },
   { id: 'compact', label: 'Compact', hint: 'Une page dense' }
 ];
 
-const normalizeTemplate = (t: any): CvTemplate => (t === 'moderncv' || t === 'compact' ? t : 'article');
+const normalizeTemplate = normalizeCvTemplate;
 const templateLabel = (t?: CvTemplate) => TEMPLATE_OPTIONS.find(o => o.id === normalizeTemplate(t))?.label || 'Classique';
 
 const slug = (s: string) =>
@@ -128,9 +131,13 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
     return () => { alive = false; };
   }, []);
 
+  // La photo n'est envoyée qu'à la compilation, et seulement pour les modèles qui l'affichent
+  const usesPhoto = PHOTO_TEMPLATES.includes(template);
+  const photo = usesPhoto && userProfile.photo ? userProfile.photo : undefined;
+
   /** Compile le code LaTeX sur le serveur et renvoie le PDF. */
   const fetchPdf = async (code: string): Promise<Blob> => {
-    const res = await apiFetch('/api/latex/compile', { latexCode: code });
+    const res = await apiFetch('/api/latex/compile', { latexCode: code, ...(photo ? { photo } : {}) });
     if (!res.ok) {
       const data = await res.json().catch(() => null);
       throw new Error(data?.error || `Compilation impossible (${res.status}).`);
@@ -280,6 +287,55 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
     setTimeout(() => setCopiedLatex(false), 2000);
   };
 
+  const baseName = (userProfile.fullName || 'Candidat').replace(/\s+/g, '_');
+  const companyName = (job?.company || 'Poste').replace(/\s+/g, '_');
+
+  /** Lettre mise en forme (même style que le CV) : code LaTeX, sans appel à l'IA. */
+  const renderLetterLatex = async (): Promise<string> => {
+    const res = await apiFetch('/api/tailor/render-letter', { candidate: userProfile, job, template, letter: coverLetter });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.latexCode) throw new Error(data?.error || `Mise en forme de la lettre impossible (${res.status}).`);
+    return data.latexCode;
+  };
+  const [isLetterBusy, setIsLetterBusy] = useState(false);
+
+  const handleLetterPdf = async () => {
+    setIsLetterBusy(true);
+    setErrorMessage(null);
+    try {
+      const code = await renderLetterLatex();
+      const res = await apiFetch('/api/latex/compile', { latexCode: code });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `Compilation impossible (${res.status}).`);
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Lettre_${baseName}_${companyName}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'Téléchargement de la lettre impossible.');
+    } finally {
+      setIsLetterBusy(false);
+    }
+  };
+
+  const handleLetterTex = async () => {
+    setIsLetterBusy(true);
+    setErrorMessage(null);
+    try {
+      downloadText(await renderLetterLatex(), `Lettre_${baseName}_${companyName}.tex`);
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'Téléchargement de la lettre impossible.');
+    } finally {
+      setIsLetterBusy(false);
+    }
+  };
+
   const handleCopyLetter = () => {
     navigator.clipboard.writeText(coverLetter).catch(() => {});
     setCopiedLetter(true);
@@ -399,7 +455,7 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
       <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-slate-500" id="studio-template-label">Modèle</span>
-          <div role="group" aria-labelledby="studio-template-label" className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-0.5">
+          <div role="group" aria-labelledby="studio-template-label" className="inline-flex flex-wrap rounded-xl border border-slate-200 bg-slate-50 p-0.5">
             {TEMPLATE_OPTIONS.map(t => (
               <button
                 key={t.id}
@@ -417,7 +473,10 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
               </button>
             ))}
           </div>
-          <span className="text-xs text-slate-400">{tailored ? 'Changer de modèle garde votre contenu.' : 'Changer de modèle régénère le CV.'}</span>
+          <span className="text-xs text-slate-500">{tailored ? 'Changer de modèle garde votre contenu.' : 'Changer de modèle régénère le CV.'}</span>
+          {usesPhoto && !userProfile.photo && (
+            <span className="text-xs text-slate-600">Ce modèle peut afficher votre photo : ajoutez-la dans votre profil (facultatif).</span>
+          )}
           {isRendering && <span className="text-xs text-brand-700" role="status">Mise à jour du CV…</span>}
           {model && !isGenerating && <span className="text-xs text-slate-400">Rédigé avec {model}</span>}
         </div>
@@ -525,10 +584,22 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
           <div className="space-y-3">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-slate-500">Lettre personnalisée pour {job.company}. Relisez-la avant l'envoi.</p>
-              <Button size="sm" variant="ghost" onClick={handleCopyLetter} disabled={!coverLetter}>
-                {copiedLetter ? <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
-                {copiedLetter ? 'Copié' : 'Copier la lettre'}
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="ghost" onClick={handleCopyLetter} disabled={!coverLetter}>
+                  {copiedLetter ? <Check className="h-3.5 w-3.5 text-emerald-600" aria-hidden="true" /> : <Copy className="h-3.5 w-3.5" aria-hidden="true" />}
+                  {copiedLetter ? 'Copié' : 'Copier la lettre'}
+                </Button>
+                {compilerAvailable && (
+                  <Button size="sm" variant="secondary" onClick={handleLetterPdf} disabled={!coverLetter.trim() || isLetterBusy} title={`Lettre mise en page dans le style du modèle ${templateLabel(template)}`}>
+                    <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                    {isLetterBusy ? 'Préparation…' : 'Lettre en PDF'}
+                  </Button>
+                )}
+                <Button size="sm" variant="ghost" onClick={handleLetterTex} disabled={!coverLetter.trim() || isLetterBusy}>
+                  <Download className="h-3.5 w-3.5" aria-hidden="true" />
+                  Lettre .tex
+                </Button>
+              </div>
             </div>
             <textarea
               aria-label="Lettre de motivation"

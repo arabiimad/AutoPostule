@@ -7,7 +7,7 @@ import { COMPREHENSIVE_REAL_JOBS } from "./src/realJobsData.ts";
 import { filterJobs } from "./src/utils/jobFilter.ts";
 import { calculateCandidateMatch } from "./src/utils/skillMatcher.ts";
 import { searchRealJobs, hasRealSources, getSourceStatus } from "./server/jobSources.ts";
-import { generateFallbackLatex, normalizeTemplate, templateInstructions, compileLatex, detectLatexCompiler, TEMPLATES } from "./server/latex.ts";
+import { generateFallbackLatex, generateLetterLatex, normalizeTemplate, compileLatex, detectLatexCompiler, decodeJpegPhoto, withoutPhoto, TEMPLATES } from "./server/latex.ts";
 import { authMiddleware, getAuthMode } from "./server/auth.ts";
 import { extractTextFromDocx } from "./server/docx.ts";
 import { kv, countApiCall, getQuotaUsage } from "./server/store.ts";
@@ -346,6 +346,11 @@ async function startServer() {
   // Recherche d'offres : quotas des API partenaires (60/min pour La bonne alternance), résultats en cache
   app.use("/api/jobs", createRateLimiter("jobs", 40, 60_000));
   app.use("/api/client-errors", createRateLimiter("errors", 20, 60_000));
+  // La photo du profil ne sert qu'à la mise en page : retirée avant tout traitement (IA, garde-fous, journaux)
+  app.use(["/api/tailor", "/api/interview"], (req: any, _res: any, next: any) => {
+    if (req.body?.candidate) req.body.candidate = withoutPhoto(req.body.candidate);
+    next();
+  });
 
   // Erreurs JavaScript remontées par le navigateur (suivi d'erreurs sans service tiers)
   app.post("/api/client-errors", (req, res) => {
@@ -720,6 +725,15 @@ Renvoie UNIQUEMENT un tableau JSON valide (sans backticks markdown si possible, 
     return res.json({ template, latexCode: generateFallbackLatex(applyTailored(candidate, tailored), job, template, { tailored: true }) });
   });
 
+  // 3 bis bis. Mise en forme de la lettre de motivation (même style que le CV) : aucun appel IA
+  app.post("/api/tailor/render-letter", (req, res) => {
+    const { candidate, job } = req.body || {};
+    const letter = String(req.body?.letter || "").slice(0, 12_000);
+    if (!letter.trim()) return res.status(400).json({ success: false, error: "Lettre vide : rédigez ou générez la lettre d'abord." });
+    const template = normalizeTemplate(req.body?.template ?? candidate?.preferredTemplate);
+    return res.json({ template, latexCode: generateLetterLatex(candidate, job, letter, template) });
+  });
+
   // 3 ter. Retouche ciblée d'une puce, de l'accroche ou du titre
   app.post("/api/tailor/rewrite", async (req, res) => {
     const { candidate, job, text, instruction } = req.body || {};
@@ -841,7 +855,8 @@ Renvoie uniquement un JSON : { "subject": "objet", "body": "texte de l'email sig
   });
   app.post("/api/latex/compile", async (req, res) => {
     const tex = String(req.body?.latexCode || "");
-    const result = await compileLatex(tex);
+    // Photo facultative (modèles Photo et Créatif) : JPEG uniquement, écrite à côté du .tex
+    const result = await compileLatex(tex, { photo: decodeJpegPhoto(req.body?.photo) });
     if (result.error === "NO_COMPILER") {
       return res.status(501).json({ success: false, error: "Aucun compilateur LaTeX sur le serveur (installez TeX Live, MiKTeX ou tectonic), ou utilisez Overleaf." });
     }
