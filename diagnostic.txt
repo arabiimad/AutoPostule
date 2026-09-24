@@ -1,0 +1,74 @@
+﻿
+=== Versions
+node v24.11.0
+npm 11.6.1
+git version 2.51.0.windows.2
+Microsoft Windows NT 10.0.26200.0
+dossier : C:\Users\Etudiant\antigravity\AutoPostule-AI---Agent-Candidature-&-Overleaf-LaTeX
+
+=== Git avant
+version-locale-20260925-0045
+635d0cc Version locale (20260925-0045)
+cb85cb9 Version locale (20260925-0036)
+c0ff690 Visiteur / compte : plus de session locale en production, fonctions personnelles réservées aux comptes
+?? reparer-kareer.cmd
+
+=== Sauvegarde puis passage sur la version fusionnee
+diff --git a/reparer-kareer.cmd b/reparer-kareer.cmd
+new file mode 100644
+index 0000000..1f22f83
+git : remote: 
+Au caractère Ligne:40 : 5
++     git push -q -u origin "version-locale-$s"
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (remote: :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+remote: Create a pull request for 'version-locale-20260925-0111' on GitHub by visiting:        
+remote:      https://github.com/arabiimad/AutoPostule/pull/new/version-locale-20260925-0111        
+remote: 
+modifications locales sauvegardees sur version-locale-20260925-0111
+git : From https://github.com/arabiimad/AutoPostule
+Au caractère Ligne:43 : 3
++   git fetch origin $branche
++   ~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (From https://gi...mad/AutoPostule:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ * branch            claude/peaceful-tesla-0655tn -> FETCH_HEAD
+branch 'claude/peaceful-tesla-0655tn' set up to track 'origin/claude/peaceful-tesla-0655tn'.
+git : Switched to a new branch 'claude/peaceful-tesla-0655tn'
+Au caractère Ligne:44 : 3
++   git checkout -B $branche "origin/$branche"
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Switched to a n...l-tesla-0655tn':String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+branche actuelle : claude/peaceful-tesla-0655tn
+25b6040 reparer-kareer.cmd : mise à jour, test de démarrage et rapport de diagnostic
+
+=== Fichiers de la version fusionnee
+src/components/KareerLogo.tsx : True
+server/atsCheck.ts : True
+src/components/tools/ToolsView.tsx : True
+src/components/AccountGate.tsx : True
+.env present : True
+
+=== npm install
+
+up to date in 9s
+
+=== Verification des types (npm run lint)
+
+> autopostule@0.0.0 lint
+> node node_modules/typescript/bin/tsc --noEmit
+
+=== Demarrage de test (30 s, port 3099)
+api/health repond : False
+--- journal du serveur
+Server running on http://localhost:3099
+{"time":"2026-09-24T23:12:02.903Z","level":"info","event":"server_started","port":3099,"mode":"development","storage":"memory","sources":{"laBonneAlternance":true,"franceTravail":true,"jsearch":true,"adzuna":true,"jooble":true}}
+[33m(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - `__dirname` (vite.config.ts:11:27). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.[39m
+[31mWebSocket server error: Port 24678 is already in use[39m
