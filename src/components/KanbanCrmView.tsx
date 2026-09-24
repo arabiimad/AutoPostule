@@ -72,7 +72,7 @@ const AppCard: React.FC<{
       <div className="mt-3 flex flex-wrap gap-1.5">
         <Badge>{CONTRACT_LABELS[app.contractType] || app.contractType}</Badge>
         {app.isSpontaneous && <Badge tone="sky">Spontanée</Badge>}
-        {typeof app.matchScore === 'number' && app.matchScore > 0 && <Badge tone={app.matchScore >= 70 ? 'green' : app.matchScore >= 40 ? 'amber' : 'neutral'}>{app.matchScore} % compatible</Badge>}
+
         {(app.versions?.length || 0) > 0 && <Badge title="Versions précédentes du CV et de la lettre">{app.versions!.length + 1} versions</Badge>}
       </div>
 
@@ -197,7 +197,7 @@ export const KanbanCrmView: React.FC<KanbanCrmViewProps> = ({
                 <Button variant="secondary" size="sm" onClick={() => downloadFile(`candidatures-${stamp()}.csv`, applicationsToCsv(applications), 'text/csv;charset=utf-8')} title="Tableau compatible Excel">
                   <Download className="h-3.5 w-3.5" /> Exporter (Excel)
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => downloadFile(`autopostule-sauvegarde-${stamp()}.json`, applicationsBackup(applications), 'application/json')} title="Sauvegarde complète, réimportable (CV et lettres inclus)">
+                <Button variant="ghost" size="sm" onClick={() => downloadFile(`kareer-sauvegarde-${stamp()}.json`, applicationsBackup(applications), 'application/json')} title="Sauvegarde complète, réimportable (CV et lettres inclus)">
                   <Download className="h-3.5 w-3.5" /> Sauvegarde
                 </Button>
               </>

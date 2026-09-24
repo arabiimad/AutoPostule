@@ -28,6 +28,14 @@ export interface SearchUrlState {
 /** Outils publics : adresse directe partageable (/verificateur-cv-ats, /match-cv-offre). */
 export const PUBLIC_TOOL_PATHS: Partial<Record<TabId, string>> = { ats: '/verificateur-cv-ats', match: '/match-cv-offre' };
 
+/** Pages ouvertes sans compte quand les comptes sont obligatoires : offres, tarifs et outils publics. */
+export const OPEN_TO_VISITORS: TabId[] = ['radar', 'pricing', 'ats', 'match'];
+
+/** Page réservée aux comptes (écran « Créez un compte ») pour un visiteur ? */
+export function isGatedForVisitor(tab: TabId, gated: boolean): boolean {
+  return gated && !OPEN_TO_VISITORS.includes(tab);
+}
+
 export function readTab(): TabId {
   const byPath = (Object.keys(PUBLIC_TOOL_PATHS) as TabId[]).find((t) => window.location.pathname.replace(/\/+$/, '') === PUBLIC_TOOL_PATHS[t]);
   if (byPath) return byPath;

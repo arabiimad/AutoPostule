@@ -25,6 +25,8 @@ const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
 export const cloudEnabled = !!(url && key);
+/** Comptes en ligne configurés : pas de session locale, les fonctions personnelles exigent un compte. */
+export const accountsRequired = cloudEnabled;
 /** Connexion Google : à activer dans Supabase (Authentication → Providers) puis VITE_AUTH_GOOGLE=on. */
 export const googleAuthEnabled = cloudEnabled && import.meta.env.VITE_AUTH_GOOGLE === 'on';
 

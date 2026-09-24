@@ -4,14 +4,17 @@ import {
   Laptop, Link2, MapPin, Navigation, Upload, Wallet, Zap, Check, Share2, Building2, Globe, Users
 } from 'lucide-react';
 import type { Application, JobOffer, UserProfile } from '../../types';
-import type { CandidateMatch } from '../../utils/skillMatcher';
+import type { JobFit } from '../../utils/skillMatcher';
 import { getApplyUrl, buildJobSearchLinks } from '../../utils/jobLinks';
-import { Badge, Button, CompanyAvatar, LinkButton, MatchRing, cx } from '../ui';
+import { Badge, Button, CompanyAvatar, FitBadge, LinkButton, cx } from '../ui';
 import { CONTRACT_LABELS, REMOTE_LABELS, formatLongDate, publishedPhrase, sourceShortName } from '../../utils/format';
 
 interface JobDetailProps {
   job: JobOffer;
-  match: CandidateMatch;
+  match: JobFit;
+  /** Compte en ligne : l'adéquation n'est montrée qu'aux utilisateurs connectés. */
+  signedIn?: boolean;
+  onOpenAuthModal?: (mode: 'login' | 'register') => void;
   userProfile: UserProfile;
   application?: Application;
   onToggleSave: () => void;
@@ -36,7 +39,7 @@ const Meta: React.FC<{ icon: React.ElementType; children: React.ReactNode }> = (
   <span className="inline-flex items-center gap-1.5 text-sm text-slate-600"><Icon className="h-4 w-4 text-slate-400" />{children}</span>
 );
 
-export const JobDetail: React.FC<JobDetailProps> = ({ job, match, userProfile, application, onToggleSave, onPrepare, onExpressApply, onOpenCvUpload, onBack, busy, shareUrl }) => {
+export const JobDetail: React.FC<JobDetailProps> = ({ job, match, userProfile, application, onToggleSave, onPrepare, onExpressApply, onOpenCvUpload, onBack, busy, shareUrl, signedIn = false, onOpenAuthModal }) => {
   const [copied, setCopied] = React.useState(false);
   const [shared, setShared] = React.useState(false);
   const spontaneous = !!job.isSpontaneous;
@@ -159,13 +162,23 @@ export const JobDetail: React.FC<JobDetailProps> = ({ job, match, userProfile, a
       </div>
 
       {/* Compatibilité (sans objet pour une candidature spontanée : pas de compétences listées) */}
-      {!spontaneous && <Section title="Votre compatibilité">
-        {hasProfile ? (
-          match.score === null ? (
-            <p className="text-sm text-slate-500">Cette offre ne liste pas de compétences précises : lisez le descriptif pour juger de votre adéquation.</p>
+      {!spontaneous && <Section title="Votre adéquation avec ce poste">
+        {!signedIn ? (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-dashed border-slate-300 p-4">
+            <p className="text-sm text-slate-600">Connectez-vous pour savoir si cette offre correspond à votre parcours, et pourquoi.</p>
+            {onOpenAuthModal && <Button variant="secondary" size="sm" onClick={() => onOpenAuthModal('register')}>Créer un compte gratuit</Button>}
+          </div>
+        ) : hasProfile ? (
+          match.level === null ? (
+            <p className="text-sm text-slate-500">L’offre ne donne pas assez d’informations pour estimer votre adéquation : lisez le descriptif.</p>
           ) : (
-            <div className="flex flex-col sm:flex-row gap-5">
-              <MatchRing score={match.score} size={64} label />
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <FitBadge level={match.level} className="text-sm" />
+                <ul className="space-y-0.5 text-sm text-slate-600">
+                  {match.reasons.map((r) => <li key={r}>· {r}</li>)}
+                </ul>
+              </div>
               <div className="flex-1 space-y-3">
                 {match.matchedKeywords.length > 0 && (
                   <div>

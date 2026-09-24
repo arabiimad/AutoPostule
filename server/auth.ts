@@ -3,8 +3,9 @@
  *
  * AUTH_MODE (variable d'environnement) :
  *  - "off"      : aucune vérification (développement).
- *  - "optional" : (défaut) le jeton est vérifié s'il est présent ; limites et quotas se font alors par compte.
+ *  - "optional" : le jeton est vérifié s'il est présent ; limites et quotas se font alors par compte.
  *  - "required" : les routes IA exigent un compte connecté.
+ * Par défaut : "required" si Supabase est configuré (production), sinon "optional".
  *
  * Le jeton de session est validé auprès de Supabase (GET /auth/v1/user) ; le résultat est gardé
  * en cache 60 s pour ne pas interroger Supabase à chaque requête.
@@ -43,13 +44,16 @@ function getVerifier(): Verifier | null {
 }
 
 export function getAuthMode(): "off" | "optional" | "required" {
-  const m = String(process.env.AUTH_MODE || "optional").toLowerCase();
+  const fallback = process.env.SUPABASE_URL ? "required" : "optional";
+  const m = String(process.env.AUTH_MODE || fallback).toLowerCase();
   return m === "off" || m === "required" ? m : "optional";
 }
 
 /** Middleware Express : renseigne req.uid (et req.email) si un jeton valide est fourni. */
-export function authMiddleware() {
-  const mode = getAuthMode();
+export function authMiddleware(options: { optional?: boolean } = {}) {
+  const base = getAuthMode();
+  // Routes ouvertes aux visiteurs (forfaits, consommation) : identification seulement
+  const mode = options.optional && base === "required" ? "optional" : base;
   return async (req: any, res: any, next: any) => {
     if (mode === "off") return next();
     const header = String(req.headers.authorization || "");

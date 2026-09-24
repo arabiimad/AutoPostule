@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as cloud from './data/cloud';
-import { isCloudUser, type AppUser as User } from './data/cloud';
+import { accountsRequired, isCloudUser, type AppUser as User } from './data/cloud';
+import { AccountGate } from './components/AccountGate';
 import { Header } from './components/Header';
 import { JobSearchView } from './components/jobs/JobSearchView';
 import { LatexStudioModal } from './components/LatexStudioModal';
@@ -10,18 +11,19 @@ import { InterviewCockpitModal } from './components/InterviewCockpitModal';
 import { MasterProfileView } from './components/MasterProfileView';
 import { AuthModal } from './components/AuthModal';
 import { PricingView } from './components/PricingView';
+import { OfferMatchView } from './components/OfferMatchView';
 import { UpgradeModal } from './components/UpgradeModal';
 import { track, identifyUser } from './utils/monitoring';
 import { fetchUsage, QUOTA_EVENT, type AccountUsage, type QuotaEventDetail } from './data/account';
 import { CvUploadModal } from './components/CvUploadModal';
 import { EMPTY_PROFILE } from './mockData';
-import { UserProfile, JobOffer, Application, AgentLog, ApplicationStatus, InterviewPrepKit, CvTemplate, SavedSearch, DossierVersion } from './types';
+import { UserProfile, JobOffer, Application, AgentLog, ApplicationStatus, InterviewPrepKit, CvTemplate, SavedSearch, DossierVersion, TailoredCv, OfferAnalysis } from './types';
 import { apiFetch, readJson as readApiJson } from './utils/api';
-import { Badge, Button, CompanyAvatar, EmptyState, MatchRing, PageHeader } from './components/ui';
+import { Badge, Button, CompanyAvatar, EmptyState, FitBadge, PageHeader } from './components/ui';
 import { CONTRACT_LABELS, sourceShortName } from './utils/format';
-import { readTab, readSearch, writeTab, writeUrl, type TabId, type SearchUrlState } from './utils/url';
+import { isGatedForVisitor, readTab, readSearch, writeTab, writeUrl, type TabId, type SearchUrlState } from './utils/url';
 import { FollowUpModal } from './components/FollowUpModal';
-import { calculateCandidateMatch } from './utils/skillMatcher';
+import { assessFit, calculateCandidateMatch } from './utils/skillMatcher';
 import { getApplyUrl } from './utils/jobLinks';
 import { normalizeCvTemplate } from './utils/templates';
 import { ToolsView } from './components/tools/ToolsView';
@@ -127,6 +129,7 @@ export default function App() {
   const [notificationsOn, setNotificationsOn] = useState(notificationsAllowed());
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('register');
+  const [authReason, setAuthReason] = useState<string | undefined>(undefined);
   const [cvUploadModalOpen, setCvUploadModalOpen] = useState(false);
   const [isMandatoryOnboarding, setIsMandatoryOnboarding] = useState(false);
 
@@ -156,6 +159,9 @@ export default function App() {
   profileRef.current = userProfile;
   const applicationsRef = useRef<Application[]>(applications);
   applicationsRef.current = applications;
+
+  // Offre collée (« Adapter mon CV ») : contenu adapté transmis au Studio
+  const [pastedDossier, setPastedDossier] = useState<{ jobId: string; tailored: TailoredCv; analysis: OfferAnalysis } | null>(null);
 
   // Forfait et consommation (freemium)
   const [accountUsage, setAccountUsage] = useState<AccountUsage | null>(null);
@@ -213,12 +219,43 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToastMessage(null), error ? 7000 : 5000);
   };
 
+  const signedIn = isCloudUser(currentUser);
+  /** Visiteur sur un service qui exige un compte (production). */
+  const gated = accountsRequired && !signedIn;
+  /** Onglets ouverts aux visiteurs : la recherche d'offres et les tarifs. */
+  // Offres, tarifs et outils publics (vérificateur ATS, comparaison CV / offre) restent ouverts aux visiteurs
+  const showGate = isGatedForVisitor(currentTab, gated);
+  const openAuth = (mode: 'login' | 'register', reason?: string) => {
+    setAuthReason(reason);
+    setAuthModalMode(mode);
+    setAuthModalOpen(true);
+  };
+  /** Renvoie true (et ouvre l'inscription) si l'action exige un compte. */
+  const needAccount = (reason: string) => {
+    if (!accountsRequired || isCloudUser(currentUserRef.current)) return false;
+    track('account_gate', { reason });
+    openAuth('register', reason);
+    return true;
+  };
+  const openCvUpload = () => {
+    if (needAccount('Créez votre compte pour importer votre CV : il sert de base à toutes vos candidatures.')) return;
+    setIsMandatoryOnboarding(false);
+    setCvUploadModalOpen(true);
+  };
+
   const addLog = (log: Omit<AgentLog, 'id' | 'timestamp'>) => {
     setAgentLogs(prev => [{ id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, timestamp: nowTime(), ...log }, ...prev].slice(0, 100));
   };
 
   /** Charge une session locale (sans compte en ligne) à partir du stockage du navigateur. */
   const loadLocalSession = () => {
+    if (accountsRequired) {
+      // Production : aucune donnée personnelle hors compte
+      setCurrentUser(null);
+      setUserProfile(EMPTY_PROFILE);
+      setApplications([]);
+      return;
+    }
     const stored = readJson<{ uid: string; displayName?: string; email?: string }>(LOCAL_USER_KEY);
     if (stored?.uid) {
       const localUser = { uid: stored.uid, displayName: stored.displayName || '', email: stored.email || '' } as unknown as User;
@@ -429,6 +466,7 @@ export default function App() {
   };
 
   const handleSaveSearch = () => {
+    if (needAccount('Créez votre compte pour enregistrer cette recherche et être prévenu(e) des nouvelles offres.')) return;
     const params = lastParams.current;
     const saved = profileRef.current.savedSearches || [];
     if (!params.query.trim() && !params.location.trim()) {
@@ -533,7 +571,7 @@ export default function App() {
     try {
       if (isCloudUser(user)) {
         await cloud.saveProfile(user.uid, toSave);
-      } else {
+      } else if (!accountsRequired) {
         writeJson(profileKey(storageUid(user)), toSave);
       }
       if (!options.silent) {
@@ -549,7 +587,7 @@ export default function App() {
   };
 
   const saveApplicationsLocally = (user: User | null, apps: Application[]) => {
-    if (!isCloudUser(user)) writeJson(appsKey(storageUid(user)), apps);
+    if (!accountsRequired && !isCloudUser(user)) writeJson(appsKey(storageUid(user)), apps);
   };
 
   const persistApplication = async (app: Application) => {
@@ -671,6 +709,7 @@ export default function App() {
   /** Doit être appelé directement dans un gestionnaire de clic (ouverture du portail non bloquée). */
   const handleInstantAutoApply = async (job: JobOffer) => {
     if (!job || isAgentRunning) return;
+    if (needAccount('Créez votre compte pour préparer votre CV et votre lettre pour cette offre.')) return;
     track('express_apply', { spontaneous: !!job.isSpontaneous });
 
     // Contrôles synchrones AVANT toute attente
@@ -759,7 +798,7 @@ export default function App() {
 
     if (!best) {
       addLog({ type: 'match', message: 'Aucune nouvelle offre ne respecte vos critères.' });
-      showToast('Aucune offre retenue', `Aucune nouvelle offre n'atteint ${threshold} % de compatibilité avec vos critères.`);
+      showToast('Aucune offre retenue', 'Aucune nouvelle offre ne correspond assez à votre profil et à vos critères.');
       return;
     }
     addLog({ type: 'match', message: `Offre retenue : ${best.job.title} — ${best.job.company}.`, score: best.score as number });
@@ -785,6 +824,7 @@ export default function App() {
 
   /** Sauvegarder / retirer une offre (colonne « Sauvegardées » du suivi). */
   const handleToggleSaveJob = async (job: JobOffer) => {
+    if (needAccount('Créez votre compte pour sauvegarder des offres et suivre vos candidatures.')) return;
     const existing = findExistingApplication(job);
     if (existing) {
       if (existing.status === 'detected' && !existing.latexResumeCode) {
@@ -863,11 +903,11 @@ export default function App() {
   const studioJobs = useMemo(() => {
     if (userProfile.skills.length === 0) return jobs.slice(0, 60);
     return jobs
-      .map(j => ({ j, s: calculateCandidateMatch(userProfile.skills, j.skillsRequired).score ?? -1 }))
+      .map(j => ({ j, s: assessFit(userProfile, j).rank }))
       .sort((a, b) => b.s - a.s)
       .slice(0, 60)
       .map(x => x.j);
-  }, [jobs, userProfile.skills]);
+  }, [jobs, userProfile]);
 
   const openLatexForApplication = (app: Application) => {
     const matchedJob = jobs.find(j => j.id === app.jobId) || {
@@ -898,15 +938,10 @@ export default function App() {
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         currentUser={currentUser}
-        onOpenAuthModal={(mode) => {
-          setAuthModalMode(mode);
-          setAuthModalOpen(true);
-        }}
+        onOpenAuthModal={(mode) => openAuth(mode)}
         onLogout={handleLogout}
-        onOpenCvUpload={() => {
-          setIsMandatoryOnboarding(false);
-          setCvUploadModalOpen(true);
-        }}
+        onOpenCvUpload={gated ? undefined : openCvUpload}
+        visibleTabs={gated ? ['radar', 'latex'] : undefined}
         autoApplyActive={!!currentUser}
         appliedCount={submittedCount}
         interviewCount={interviewCount}
@@ -919,9 +954,13 @@ export default function App() {
       {/* Main Content Area */}
       <main id="contenu" tabIndex={-1} className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-28 lg:pb-12 outline-none">
         
+        {showGate && <AccountGate tab={currentTab} onOpenAuthModal={(mode) => openAuth(mode)} />}
+
         {/* SUB-VIEW 1: LIVE RADAR (CHASSEUR D'OFFRES TEMPS RÉEL) */}
         {currentTab === 'radar' && (
           <JobSearchView
+            signedIn={signedIn}
+            onOpenAuthModal={(mode) => openAuth(mode)}
             jobs={jobs}
             jobsMeta={jobsMeta}
             initialSearch={lastParams.current}
@@ -941,20 +980,18 @@ export default function App() {
             onSearch={handleFetchLiveJobs}
             onToggleSave={handleToggleSaveJob}
             onPrepare={(job) => {
+              if (needAccount('Créez votre compte pour adapter votre CV et votre lettre à cette offre.')) return;
               setSelectedAppForLatex(findExistingApplication(job) || null);
               setSelectedJobForLatex(job);
             }}
             onExpressApply={handleInstantAutoApply}
             busy={isAgentRunning}
-            onOpenCvUpload={() => {
-              setIsMandatoryOnboarding(false);
-              setCvUploadModalOpen(true);
-            }}
+            onOpenCvUpload={openCvUpload}
           />
         )}
 
         {/* SUB-VIEW 2: AGENT AUTOMATION (LE PILOTE AUTOMATIQUE) */}
-        {currentTab === 'agent' && (
+        {!showGate && currentTab === 'agent' && (
           <AgentAutomationView
             userProfile={userProfile}
             onSaveSettings={(patch) => { handleSaveProfile({ ...userProfile, ...patch }, { silent: true }).catch(() => {}); }}
@@ -967,24 +1004,39 @@ export default function App() {
         )}
 
         {/* SUB-VIEW 3: STUDIO LATEX & OVERLEAF (DIRECT VIEW) */}
-        {currentTab === 'latex' && (
+        {!showGate && currentTab === 'latex' && (
           <div>
             <PageHeader
               title="Studio CV"
-              subtitle={studioJobs.length < jobs.length
-                ? `Les ${studioJobs.length} offres les plus compatibles avec votre profil. Choisissez-en une pour générer un CV LaTeX et une lettre adaptés.`
-                : 'Choisissez une offre pour générer un CV LaTeX et une lettre adaptés, à relire puis compiler en PDF.'}
+              subtitle="Adaptez votre CV et votre lettre à une offre : collez une annonce trouvée ailleurs, ou choisissez parmi vos résultats de recherche."
             />
+            <div className="mb-6">
+              <OfferMatchView
+                userProfile={userProfile}
+                signedIn={signedIn}
+                onOpenCvUpload={openCvUpload}
+                onOpenStudio={(job, tailored, analysis) => {
+                  setPastedDossier({ jobId: job.id, tailored, analysis });
+                  setSelectedAppForLatex(findExistingApplication(job) || null);
+                  setSelectedJobForLatex(job);
+                }}
+              />
+            </div>
+            {studioJobs.length > 0 && (
+              <h2 className="mb-3 text-base font-bold text-slate-900">
+                {studioJobs.length < jobs.length ? `Les ${studioJobs.length} offres de votre recherche qui vous correspondent le mieux` : 'Offres de votre recherche'}
+              </h2>
+            )}
             {studioJobs.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white">
-                <EmptyState icon={<FileCode2 className="h-6 w-6" />} title="Aucune offre chargée" action={<Button variant="primary" onClick={() => setCurrentTab('radar')}>Rechercher des offres</Button>}>
-                  Lancez une recherche dans l’onglet Offres pour préparer un CV adapté.
+                <EmptyState icon={<FileCode2 className="h-6 w-6" />} title="Aucune offre de recherche" action={<Button variant="primary" onClick={() => setCurrentTab('radar')}>Rechercher des offres</Button>}>
+                  Collez une offre ci-dessus, ou lancez une recherche dans l’onglet Offres.
                 </EmptyState>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {studioJobs.map((job) => {
-                  const m = calculateCandidateMatch(userProfile.skills, job.skillsRequired);
+                  const m = assessFit(userProfile, job);
                   const existing = findExistingApplication(job);
                   return (
                     <div key={job.id} className="flex flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 hover:border-slate-300 hover:shadow-sm transition-all">
@@ -996,9 +1048,9 @@ export default function App() {
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             <Badge tone="brand">{CONTRACT_LABELS[job.contractType] || job.contractType}</Badge>
                             {existing?.latexResumeCode && <Badge tone="green">CV déjà généré</Badge>}
+                            {signedIn && <FitBadge level={m.level} />}
                           </div>
                         </div>
-                        {userProfile.skills.length > 0 && <MatchRing score={m.score} size={40} />}
                       </div>
                       <Button
                         variant={existing?.latexResumeCode ? 'secondary' : 'primary'}
@@ -1016,7 +1068,7 @@ export default function App() {
         )}
 
         {/* SUB-VIEW 4: KANBAN CRM */}
-        {currentTab === 'kanban' && (
+        {!showGate && currentTab === 'kanban' && (
           <KanbanCrmView
             applications={applications}
             onOpenLatexForApp={openLatexForApplication}
@@ -1031,7 +1083,7 @@ export default function App() {
         )}
 
         {/* SUB-VIEW 5: COCKPIT ENTRETIENS */}
-        {currentTab === 'interview' && (() => {
+        {!showGate && currentTab === 'interview' && (() => {
           const interviewApps = applications
             .filter(a => a.status !== 'rejected' && a.status !== 'detected')
             .sort((a, b) => (a.status === 'interview' ? -1 : 0) - (b.status === 'interview' ? -1 : 0));
@@ -1074,20 +1126,14 @@ export default function App() {
         })()}
 
         {/* SUB-VIEW 6: MASTER PROFILE */}
-        {currentTab === 'profile' && (
+        {!showGate && currentTab === 'profile' && (
           <MasterProfileView
             userProfile={userProfile}
             onSaveProfile={(p) => handleSaveProfile(p)}
             isSaving={isSavingProfile}
             currentUser={currentUser}
-            onOpenAuthModal={(mode) => {
-              setAuthModalMode(mode);
-              setAuthModalOpen(true);
-            }}
-            onOpenCvUpload={() => {
-              setIsMandatoryOnboarding(false);
-              setCvUploadModalOpen(true);
-            }}
+            onOpenAuthModal={(mode) => openAuth(mode)}
+            onOpenCvUpload={openCvUpload}
             showToast={showToast}
             onAccountDeleted={async () => {
               await cloud.signOut().catch(() => {});
@@ -1113,11 +1159,8 @@ export default function App() {
         {currentTab === 'pricing' && (
           <PricingView
             usage={accountUsage}
-            signedIn={isCloudUser(currentUser)}
-            onOpenAuthModal={(mode) => {
-              setAuthModalMode(mode);
-              setAuthModalOpen(true);
-            }}
+            signedIn={signedIn}
+            onOpenAuthModal={(mode) => openAuth(mode)}
             showToast={showToast}
             paymentStatus={paymentStatus}
           />
@@ -1129,8 +1172,9 @@ export default function App() {
       {/* AUTHENTICATION & ACCOUNT CREATION MODAL */}
       <AuthModal
         isOpen={authModalOpen}
-        onClose={() => setAuthModalOpen(false)}
+        onClose={() => { setAuthModalOpen(false); setAuthReason(undefined); }}
         defaultMode={authModalMode}
+        reason={authReason}
         onSuccess={(user, isNewAccount, extra) => {
           if (!isCloudUser(user)) {
             // Session locale : on charge son propre espace de stockage
@@ -1172,20 +1216,21 @@ export default function App() {
       {selectedJobForLatex && (
         <LatexStudioModal
           key={`${selectedJobForLatex.id}-${selectedAppForLatex?.id || 'new'}`}
+          signedIn={signedIn}
           job={selectedJobForLatex}
           userProfile={userProfile}
           initialLatexCode={selectedAppForLatex?.latexResumeCode}
           initialLetter={selectedAppForLatex?.coverLetter}
           initialTemplate={selectedAppForLatex?.template}
           versions={selectedAppForLatex?.versions}
-          initialTailored={selectedAppForLatex?.tailoredContent}
-          initialAnalysis={selectedAppForLatex?.offerAnalysis}
+          initialTailored={pastedDossier?.jobId === selectedJobForLatex.id ? pastedDossier.tailored : selectedAppForLatex?.tailoredContent}
+          initialAnalysis={pastedDossier?.jobId === selectedJobForLatex.id ? pastedDossier.analysis : selectedAppForLatex?.offerAnalysis}
           onTemplateChange={(t) => {
             if (t !== userProfile.preferredTemplate) {
               handleSaveProfile({ ...userProfile, preferredTemplate: t }, { silent: true }).catch(() => {});
             }
           }}
-          onClose={() => { setSelectedJobForLatex(null); setSelectedAppForLatex(null); }}
+          onClose={() => { setSelectedJobForLatex(null); setSelectedAppForLatex(null); setPastedDossier(null); }}
           onApplyWithLatex={async (job, latexCode, coverLetter, template, tailored, analysis) => {
             track('dossier_validated', { template, tailored: !!tailored });
             const existing = findExistingApplication(job);

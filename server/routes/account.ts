@@ -146,7 +146,7 @@ export function registerAccountApiRoutes(app: Express) {
         admin(`/rest/v1/usage?user_id=eq.${id}&select=period,kind,count`),
         admin(`/rest/v1/subscriptions?user_id=eq.${id}&select=plan,status,current_period_end`)
       ]);
-      res.setHeader("Content-Disposition", `attachment; filename="autopostule-export-${new Date().toISOString().slice(0, 10)}.json"`);
+      res.setHeader("Content-Disposition", `attachment; filename="kareer-export-${new Date().toISOString().slice(0, 10)}.json"`);
       return res.json({
         exportedAt: new Date().toISOString(),
         account: { id: req.uid, email: req.email },

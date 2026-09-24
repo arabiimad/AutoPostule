@@ -12,12 +12,12 @@ import {
   Eye
 } from 'lucide-react';
 import { JobOffer, UserProfile, CvTemplate, DossierVersion, TailoredCv, OfferAnalysis } from '../types';
-import { calculateCandidateMatch, candidateHasSkill } from '../utils/skillMatcher';
+import { assessFit, candidateHasSkill } from '../utils/skillMatcher';
 import { CvContentEditor } from './studio/CvContentEditor';
 import { getApplyUrl } from '../utils/jobLinks';
 import { apiFetch } from '../utils/api';
 import { normalizeCvTemplate, PHOTO_TEMPLATES } from '../utils/templates';
-import { Badge, Button, Card, EmptyState, MatchRing, Modal, Tabs, cx } from './ui';
+import { Badge, Button, Card, EmptyState, FitBadge, Modal, Tabs, cx } from './ui';
 
 interface LatexStudioModalProps {
   job: JobOffer | null;
@@ -34,6 +34,8 @@ interface LatexStudioModalProps {
   onTemplateChange?: (template: CvTemplate) => void;
   /** Versions précédentes du dossier (la plus récente en premier). */
   versions?: DossierVersion[];
+  /** Compte en ligne : l'adéquation n'est montrée qu'aux utilisateurs connectés. */
+  signedIn?: boolean;
 }
 
 const TEMPLATE_OPTIONS: { id: CvTemplate; label: string; hint: string }[] = [
@@ -83,7 +85,8 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
   onTemplateChange,
   versions,
   initialTailored,
-  initialAnalysis
+  initialAnalysis,
+  signedIn = false
 }) => {
   const [template, setTemplate] = useState<CvTemplate>(normalizeTemplate(initialTemplate ?? userProfile.preferredTemplate));
   const [compilerAvailable, setCompilerAvailable] = useState(false);
@@ -96,7 +99,7 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
   const webFrameRef = React.useRef<HTMLIFrameElement>(null);
   const [isCompiling, setIsCompiling] = useState(false);
   // Aucune donnée de repli : le studio n'utilise que le profil de l'utilisateur connecté.
-  const computedMatch = calculateCandidateMatch(userProfile.skills, job?.skillsRequired || []);
+  const computedMatch = assessFit(userProfile, job);
 
   const [activeTab, setActiveTab] = useState<StudioTab>(initialTailored ? 'content' : 'latex');
   const [tailored, setTailored] = useState<TailoredCv | null>(initialTailored || null);
@@ -468,7 +471,6 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
   const currentTab: StudioTab =
     (activeTab === 'history' && !hasHistory) || (activeTab === 'content' && !tailored) || (activeTab === 'preview' && engine === 'latex' && !compilerAvailable) ? 'latex' : activeTab;
 
-  const scoreTone = matchScore === null ? 'neutral' : matchScore >= 70 ? 'green' : matchScore >= 40 ? 'amber' : 'neutral';
 
   return (
     <Modal
@@ -478,7 +480,7 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
       subtitle={
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="min-w-0 truncate"><span className="font-medium text-slate-700">{job.title}</span> · {job.company}</span>
-          <Badge tone={scoreTone}>{matchScore === null ? 'Compatibilité non évaluable' : `${matchScore} % de compatibilité`}</Badge>
+          {signedIn && <FitBadge level={computedMatch.level} />}
         </span>
       }
       footer={
@@ -695,9 +697,8 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
                 </p>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
-                <MatchRing score={matchScore} size={52} />
                 {matchScore === null ? (
-                  <span className="text-xs text-slate-500">Compatibilité non évaluable</span>
+                  <span className="text-xs text-slate-500">L’offre ne liste pas de compétences</span>
                 ) : (
                   <span className="text-xs text-slate-500">{matchedKeywords.length} / {matchedKeywords.length + missingKeywords.length} couvertes</span>
                 )}
@@ -706,7 +707,7 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
 
             {matchScore === null ? (
               <p className="rounded-xl bg-slate-50 px-3.5 py-2.5 text-sm text-slate-600">
-                L'offre ne liste pas de compétences : la compatibilité ne peut pas être calculée.
+                L'offre ne liste pas de compétences précises : lisez le descriptif pour repérer ce qui est attendu.
               </p>
             ) : (
               <>

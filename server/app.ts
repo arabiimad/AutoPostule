@@ -24,11 +24,12 @@ export function createApp(): Express {
   app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 
   // Vérification du compte (AUTH_MODE) puis limite de débit : 30 appels IA / minute par compte ou par IP
-  const PROTECTED = ["/api/cv", "/api/tailor", "/api/interview", "/api/latex/compile"];
+  // Outils : « Adapter mon CV à cette offre » (IA, profil) est réservé aux comptes ; ats-check et match restent publics
+  const PROTECTED = ["/api/cv", "/api/tailor", "/api/interview", "/api/latex/compile", "/api/tools/offer-match"];
   // /api/cv/html et /api/cv/pdf : rendu sans IA → même limite large que /api/tailor/render
   app.use(PROTECTED, authMiddleware());
   // Compte et abonnement : identification seulement (pas de limite IA)
-  app.use(["/api/account", "/api/billing/checkout", "/api/billing/portal"], authMiddleware());
+  app.use(["/api/account", "/api/billing/checkout", "/api/billing/portal"], authMiddleware({ optional: true }));
   app.use(["/api/account", "/api/billing"], createRateLimiter("account", 60, 60_000));
   // Mise en forme sans IA (/api/tailor/render) : appelée à chaque retouche, limite plus large
   const iaLimiter = createRateLimiter("ia", 30, 60_000);
@@ -39,9 +40,9 @@ export function createApp(): Express {
   app.use("/api/jobs", createRateLimiter("jobs", 40, 60_000));
   app.use("/api/client-errors", createRateLimiter("errors", 20, 60_000));
   // Outils publics (vérificateur ATS, correspondance CV / offre) : sans compte, sans IA, limite par IP
-  app.use("/api/tools", createRateLimiter("tools", 20, 60_000));
+  app.use(["/api/tools/ats-check", "/api/tools/match"], createRateLimiter("tools", 20, 60_000));
   // La photo du profil ne sert qu'à la mise en page : retirée avant tout traitement (IA, garde-fous, journaux)
-  app.use(["/api/tailor", "/api/interview"], (req: any, _res: any, next: any) => {
+  app.use(["/api/tailor", "/api/interview", "/api/tools/offer-match"], (req: any, _res: any, next: any) => {
     if (req.body?.candidate) req.body.candidate = withoutPhoto(req.body.candidate);
     next();
   });

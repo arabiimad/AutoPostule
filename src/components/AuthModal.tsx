@@ -22,13 +22,16 @@ interface AuthModalProps {
   /** extra : nom / titre saisis à l'inscription. Le profil en ligne est créé par App (un seul écrivain). */
   onSuccess: (user: User, isNewAccount: boolean, extra?: { fullName?: string; title?: string }) => void;
   defaultMode?: 'login' | 'register';
+  /** Pourquoi un compte est demandé (action du visiteur), affiché en sous-titre. */
+  reason?: string;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
-  defaultMode = 'register'
+  defaultMode = 'register',
+  reason
 }) => {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>(defaultMode);
   
@@ -179,7 +182,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const title =
     mode === 'register' ? 'Créer votre compte' : mode === 'login' ? 'Connexion à votre espace' : 'Mot de passe oublié';
   const subtitle =
-    mode === 'register'
+    reason && mode !== 'forgot'
+      ? reason
+      : mode === 'register'
       ? 'Synchronisez vos candidatures, vos CV et votre assistant sur tous vos appareils.'
       : mode === 'login'
         ? 'Retrouvez vos candidatures, vos CV et votre historique.'
@@ -238,11 +243,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           Continuer avec Google
         </Button>)}
 
-        {/* Session locale (sans compte) */}
-        <Button type="button" variant="ghost" size="md" onClick={() => handleLocalCandidateSession()} className="w-full border border-dashed border-slate-300">
+        {/* Session locale (sans compte) : uniquement quand les comptes en ligne ne sont pas configurés */}
+        {!cloud.accountsRequired && <Button type="button" variant="ghost" size="md" onClick={() => handleLocalCandidateSession()} className="w-full border border-dashed border-slate-300">
           <Sparkles className="h-4 w-4 text-brand-600" aria-hidden="true" />
           Continuer sans compte (session locale)
-        </Button>
+        </Button>}
 
         {cloud.cloudEnabled ? (
           <div className="flex items-center gap-3" aria-hidden="true">
@@ -261,7 +266,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" aria-hidden="true" />
               <span>{errorMessage}</span>
             </div>
-            <Button
+            {!cloud.accountsRequired && <Button
               type="button"
               variant="danger"
               size="sm"
@@ -270,7 +275,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             >
               <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
               Utiliser une session locale
-            </Button>
+            </Button>}
           </div>
         )}
 

@@ -231,3 +231,11 @@ export const Tabs: React.FC<{ tabs: { id: string; label: React.ReactNode }[]; va
     ))}
   </div>
 );
+
+/** Niveau d'adéquation offre ↔ profil (remplace l'ancien pourcentage). */
+export const FitBadge: React.FC<{ level: 'forte' | 'moyenne' | 'faible' | null; className?: string }> = ({ level, className }) => {
+  if (!level) return null;
+  const tone = level === 'forte' ? 'green' : level === 'moyenne' ? 'amber' : 'neutral';
+  const text = level === 'forte' ? 'Adéquation forte' : level === 'moyenne' ? 'Adéquation moyenne' : 'Adéquation faible';
+  return <Badge tone={tone} className={className} title="Estimée à partir de votre métier et des compétences demandées">{text}</Badge>;
+};
