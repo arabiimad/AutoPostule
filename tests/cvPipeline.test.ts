@@ -89,7 +89,7 @@ test('chaîne complète : contenu IA → modèle LaTeX (titre, accroche, puces, 
   assert.match(tex, /Pilotage du déploiement de logiciels internes sur 12 sites/);
   assert.match(tex, /AFPA/);
   assert.ok(!/Oracle/.test(tex), 'expérience masquée');
-  assert.match(tex, /\\section\*\{COMPÉTENCES\}\nJira/);
+  assert.match(tex, /\\section\*\{COMPÉTENCES\}\n\\begin\{itemize\}[^\n]*\n\s+\\item Jira/);
 });
 
 test('sans IA ou réponse illisible : CV construit depuis le profil', async () => {

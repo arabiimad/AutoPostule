@@ -38,8 +38,7 @@ interface LatexStudioModalProps {
 
 const TEMPLATE_OPTIONS: { id: CvTemplate; label: string; hint: string }[] = [
   { id: 'article', label: 'Classique', hint: 'Sobre, une colonne, sans photo' },
-  { id: 'photo', label: 'Photo', hint: 'Épuré, avec votre photo en haut à droite' },
-  { id: 'creatif', label: 'Créatif', hint: 'Bandeau de couleur et photo ronde, lisible par les logiciels de recrutement' },
+  { id: 'photo', label: 'Photo', hint: 'Formations d’abord, avec votre photo en haut à droite' },
   { id: 'moderncv', label: 'Moderne', hint: 'Dates en marge' },
   { id: 'compact', label: 'Compact', hint: 'Une page dense' }
 ];
@@ -292,7 +291,7 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
 
   /** Lettre mise en forme (même style que le CV) : code LaTeX, sans appel à l'IA. */
   const renderLetterLatex = async (): Promise<string> => {
-    const res = await apiFetch('/api/tailor/render-letter', { candidate: userProfile, job, template, letter: coverLetter });
+    const res = await apiFetch('/api/tailor/render-letter', { candidate: userProfile, job, letter: coverLetter });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data?.latexCode) throw new Error(data?.error || `Mise en forme de la lettre impossible (${res.status}).`);
     return data.latexCode;
@@ -475,7 +474,7 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
           </div>
           <span className="text-xs text-slate-500">{tailored ? 'Changer de modèle garde votre contenu.' : 'Changer de modèle régénère le CV.'}</span>
           {usesPhoto && !userProfile.photo && (
-            <span className="text-xs text-slate-600">Ce modèle peut afficher votre photo : ajoutez-la dans votre profil (facultatif).</span>
+            <span className="text-xs text-slate-600">Ce modèle affiche votre photo : ajoutez-la dans votre profil (facultatif).</span>
           )}
           {isRendering && <span className="text-xs text-brand-700" role="status">Mise à jour du CV…</span>}
           {model && !isGenerating && <span className="text-xs text-slate-400">Rédigé avec {model}</span>}
@@ -590,7 +589,7 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
                   {copiedLetter ? 'Copié' : 'Copier la lettre'}
                 </Button>
                 {compilerAvailable && (
-                  <Button size="sm" variant="secondary" onClick={handleLetterPdf} disabled={!coverLetter.trim() || isLetterBusy} title={`Lettre mise en page dans le style du modèle ${templateLabel(template)}`}>
+                  <Button size="sm" variant="secondary" onClick={handleLetterPdf} disabled={!coverLetter.trim() || isLetterBusy} title="Lettre mise en page, prête à envoyer">
                     <Download className="h-3.5 w-3.5" aria-hidden="true" />
                     {isLetterBusy ? 'Préparation…' : 'Lettre en PDF'}
                   </Button>

@@ -725,13 +725,12 @@ Renvoie UNIQUEMENT un tableau JSON valide (sans backticks markdown si possible, 
     return res.json({ template, latexCode: generateFallbackLatex(applyTailored(candidate, tailored), job, template, { tailored: true }) });
   });
 
-  // 3 bis bis. Mise en forme de la lettre de motivation (même style que le CV) : aucun appel IA
+  // 3 bis bis. Mise en forme de la lettre de motivation : aucun appel IA
   app.post("/api/tailor/render-letter", (req, res) => {
     const { candidate, job } = req.body || {};
     const letter = String(req.body?.letter || "").slice(0, 12_000);
     if (!letter.trim()) return res.status(400).json({ success: false, error: "Lettre vide : rédigez ou générez la lettre d'abord." });
-    const template = normalizeTemplate(req.body?.template ?? candidate?.preferredTemplate);
-    return res.json({ template, latexCode: generateLetterLatex(candidate, job, letter, template) });
+    return res.json({ latexCode: generateLetterLatex(candidate, job, letter) });
   });
 
   // 3 ter. Retouche ciblée d'une puce, de l'accroche ou du titre
@@ -855,7 +854,7 @@ Renvoie uniquement un JSON : { "subject": "objet", "body": "texte de l'email sig
   });
   app.post("/api/latex/compile", async (req, res) => {
     const tex = String(req.body?.latexCode || "");
-    // Photo facultative (modèles Photo et Créatif) : JPEG uniquement, écrite à côté du .tex
+    // Photo facultative (modèle Photo) : JPEG uniquement, écrite à côté du .tex
     const result = await compileLatex(tex, { photo: decodeJpegPhoto(req.body?.photo) });
     if (result.error === "NO_COMPILER") {
       return res.status(501).json({ success: false, error: "Aucun compilateur LaTeX sur le serveur (installez TeX Live, MiKTeX ou tectonic), ou utilisez Overleaf." });

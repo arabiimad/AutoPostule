@@ -42,8 +42,7 @@ const clean = (v: any) => (typeof v === "string" ? v.trim() : "");
 
 export const TEMPLATES: { id: CvTemplate; label: string; description: string }[] = [
   { id: "article", label: "Classique", description: "Sobre, titres soulignés, une colonne, sans photo." },
-  { id: "photo", label: "Photo", description: "Épuré avec photo en haut à droite, dates alignées à droite." },
-  { id: "creatif", label: "Créatif", description: "Bandeau de couleur, pastilles de compétences, photo ronde facultative ; une colonne lisible par les logiciels de recrutement." },
+  { id: "photo", label: "Photo", description: "Formations d'abord, en-tête avec icônes et photo à droite, dates alignées à droite." },
   { id: "moderncv", label: "Moderne", description: "Classe moderncv : dates en marge, couleurs, très lisible." },
   { id: "compact", label: "Compact", description: "Une page dense, marges réduites, idéal pour les profils riches." }
 ];
@@ -55,9 +54,6 @@ export function normalizeTemplate(t: any): CvTemplate {
 // Préambule robuste : n'échoue pas si lmodern ou le français de babel ne sont pas installés
 const SAFE_FRENCH = `\\IfFileExists{french.ldf}{\\usepackage[french]{babel}}{}`;
 const SAFE_FONTS = `\\IfFileExists{lmodern.sty}{\\usepackage{lmodern}}{}
-${SAFE_FRENCH}`;
-/** Police sans empattement du modèle Créatif (Lato si installée). */
-const SANS_FONTS = `\\IfFileExists{lato.sty}{\\usepackage[default]{lato}}{\\renewcommand{\\familydefault}{\\sfdefault}}
 ${SAFE_FRENCH}`;
 /**
  * Texte du PDF extractible tel quel par les logiciels de tri des candidatures :
@@ -73,6 +69,8 @@ interface CvData {
   title: string;
   contacts: string[];
   email: string;
+  /** Adresse e-mail pour mailto: (échappement d'URL). */
+  emailUrl: string;
   phone: string;
   location: string;
   links: { url: string; label: string }[];
@@ -117,6 +115,7 @@ function buildData(candidate: any, job: any, tailored = false): CvData {
       : clean(String(job?.title || "").replace(/^Candidature spontanée — /, "")) || clean(candidate?.title)),
     contacts: [email, phone, location].filter(Boolean),
     email,
+    emailUrl: escapeLatexUrl(clean(candidate?.email)),
     phone,
     location,
     links: [candidate?.linkedinUrl, candidate?.githubUrl, candidate?.portfolioUrl]
@@ -157,6 +156,21 @@ function buildData(candidate: any, job: any, tailored = false): CvData {
 const contactLine = (d: CvData, sep: string) => [d.email, d.phone, d.location].filter(Boolean).join(sep);
 const linkLine = (d: CvData, sep: string) => d.links.map((l) => `\\href{${l.url}}{${l.label}}`).join(sep);
 const projectTech = (p: CvData["projects"][number]) => (p.tech.length ? p.tech.join(", ") : "");
+/**
+ * Compétences en lignes : une compétence écrite « Catégorie : a, b » dans le profil garde sa catégorie en gras ;
+ * les autres sont regroupées sur une seule ligne.
+ */
+function skillLines(skills: string[]): { bold?: string; text: string }[] {
+  const grouped: { bold?: string; text: string }[] = [];
+  const plain: string[] = [];
+  for (const s of skills) {
+    const m = s.match(/^([^:]{2,40}) ?: (.+)$/);
+    if (m) grouped.push({ bold: m[1].trim(), text: m[2].trim() });
+    else plain.push(s);
+  }
+  return plain.length ? [...grouped, { text: plain.join(", ") }] : grouped;
+}
+
 const bulletLine = (b: { bold?: string; text: string }) => (b.bold ? `\\textbf{${b.bold} :} ${b.text}` : b.text);
 
 // ---------------------------------------------------------------------------
@@ -172,18 +186,19 @@ function renderArticle(d: CvData, compact = false): string {
     return `\\noindent\\textbf{${e.head}}${e.dates ? ` \\hfill \\textit{${e.dates}}` : ""}${e.location ? ` \\\\\n\\textit{${e.location}}` : ""}\n${bullets}\n\\vspace{${compact ? "0.1" : "0.2"}cm}`;
   }).join("\n\n");
 
-  const edu = d.education.map((e) => `    \\item ${e.year ? `\\textbf{${e.year} :} ` : ""}${e.degree}${e.institution ? ` -- \\textit{${e.institution}}` : ""}`).join("\n");
+  const edu = d.education.map((e) => `    \\item ${e.year ? `\\textbf{${e.year} :} ` : ""}${e.degree}${e.institution ? ` - \\textit{${e.institution}}` : ""}`).join("\n");
+  const skills = skillLines(d.skills).map((l) => `    \\item ${l.bold ? `\\textbf{${l.bold} :} ` : ""}${l.text}`).join("\n");
 
   const sections: string[] = [];
   if (d.summary) sections.push(`\\section*{PROFIL}\n${d.summary}`);
   if (exp) sections.push(`\\section*{EXPÉRIENCES PROFESSIONNELLES}\n${exp}`);
-  if (d.skills.length) sections.push(`\\section*{COMPÉTENCES}\n${d.skills.join(" \\textbullet{} ")}`);
+  if (skills) sections.push(`\\section*{COMPÉTENCES}\n\\begin{itemize}${itemSep}\n${skills}\n\\end{itemize}`);
   if (edu) sections.push(`\\section*{FORMATIONS}\n\\begin{itemize}${itemSep}\n${edu}\n\\end{itemize}`);
   if (d.projects.length) {
     const projects = d.projects.map((p) => `    \\item \\textbf{${p.name}}${projectTech(p) ? ` (${projectTech(p)})` : ""}${p.description ? ` : ${p.description}` : ""}`).join("\n");
     sections.push(`\\section*{PROJETS}\n\\begin{itemize}${itemSep}\n${projects}\n\\end{itemize}`);
   }
-  if (d.languages.length) sections.push(`\\section*{LANGUES}\n${d.languages.join(" \\hfill ")}`);
+  if (d.languages.length) sections.push(`\\section*{LANGUES}\n\\begin{itemize}${itemSep}\n    \\item \\textbf{Langues :} ${d.languages.join(" \\hfill ")}\n\\end{itemize}`);
 
   const color = compact ? "{RGB}{40, 40, 40}" : "{RGB}{30, 70, 100}";
   return `\\documentclass[${size},a4paper]{article}
@@ -200,14 +215,13 @@ ${ATS_TEXT}
 \\definecolor{primary}${color}
 \\titleformat{\\section}{\\${compact ? "large" : "Large"}\\bfseries\\color{primary}}{}{0em}{}[\\titlerule]
 \\titlespacing*{\\section}{0pt}{${compact ? "1ex" : "1.5ex plus 1ex minus .2ex"}}{${compact ? "0.5ex" : "1ex plus .2ex"}}
-\\setlength{\\parindent}{0pt}
-
+${compact ? "\\setlength{\\parindent}{0pt}\n" : ""}
 \\begin{document}
 \\pagestyle{empty}
 
 \\begin{center}
-    {\\${compact ? "LARGE" : "Huge"} \\textbf{${d.name}}} \\\\ \\vspace{0.15cm}
-${d.title ? `    {\\large \\textbf{${d.title}}} \\\\ \\vspace{0.15cm}\n` : ""}${d.contacts.length ? `    ${d.contacts.join(" | ")} \\\\\n` : ""}${d.links.length ? `    ${d.links.map((l) => `\\href{${l.url}}{${l.label}}`).join(" | ")}\n` : ""}\\end{center}
+    {\\${compact ? "LARGE" : "Huge"} \\textbf{${d.name}}} \\\\ \\vspace{0.2cm}
+${d.title ? `    {\\${compact ? "large" : "Large"} \\textbf{${d.title}}} \\\\ \\vspace{0.2cm}\n` : ""}${contactLine(d, " | ") ? `    ${[d.email, d.location, d.phone].filter(Boolean).join(" | ")} \\\\\n` : ""}${d.links.length ? `    ${d.links.map((l) => `\\href{${l.url}}{${l.label}}`).join(" | ")}\n` : ""}\\end{center}
 
 ${sections.join("\n\n")}
 
@@ -268,160 +282,149 @@ ${sections.join("\n\n")}
 
 
 // ---------------------------------------------------------------------------
-// Modèle « Photo » : épuré, photo en haut à droite, dates alignées à droite
+// Modèle « Photo » : reprise fidèle du CV « Jake Gutierrez » adapté (formations d'abord,
+// en-tête avec icônes et photo à droite, titres en petites capitales vert nuit)
 // ---------------------------------------------------------------------------
-function renderPhoto(d: CvData): string {
-  const bullets = (items: { bold?: string; text: string }[]) =>
-    items.length ? `\n\\begin{itemize}[leftmargin=1.4em,itemsep=0pt,topsep=1pt,parsep=0pt,label=\\textbullet]\n${items.map((b) => `  \\item \\small ${bulletLine(b)}`).join("\n")}\n\\end{itemize}` : "";
-
-  const exp = d.experiences.map((e) =>
-    `\\cvEntry{${e.company || e.role}}{${e.location}}{${e.company ? e.role : ""}}{${e.dates}}${bullets(e.bullets)}`
-  ).join("\n\\vspace{3pt}\n");
-  const edu = d.education.map((e) =>
-    e.institution ? `\\cvEntry{${e.institution}}{}{${e.degree}}{${e.year}}` : `\\cvEntry{${e.degree}}{${e.year}}{}{}`
-  ).join("\n");
-  const projects = d.projects.map((p) =>
-    `\\noindent\\textbf{${p.name}}${projectTech(p) ? ` $|$ \\emph{\\small ${projectTech(p)}}` : ""}${p.description ? `\\\\\n{\\small ${p.description}}` : ""}\\par`
-  ).join("\n\\vspace{3pt}\n");
-
-  const sections: string[] = [];
-  if (d.summary) sections.push(`\\section*{Profil}\n{\\small ${d.summary}}`);
-  if (exp) sections.push(`\\section*{Expériences professionnelles}\n${exp}`);
-  if (edu) sections.push(`\\section*{Formations}\n${edu}`);
-  if (projects) sections.push(`\\section*{Projets}\n${projects}`);
-  if (d.skills.length) sections.push(`\\section*{Compétences}\n{\\small ${d.skills.join(", ")}}`);
-  if (d.languages.length) sections.push(`\\section*{Langues}\n{\\small ${d.languages.join(" \\quad\\textbullet\\quad ")}}`);
-
-  const head = [
-    `{\\LARGE \\textsc{${d.name}}}`,
-    d.title ? `{\\large ${d.title}}` : "",
-    contactLine(d, " \\quad ") ? `\\small ${contactLine(d, " \\quad ")}` : "",
-    d.links.length ? `\\small ${linkLine(d, " \\quad ")}` : ""
-  ].filter(Boolean).join("\\\\[3pt]\n");
-  const photo = d.hasPhoto
-    ? `\\hfill\n\\begin{minipage}[c]{0.2\\textwidth}\n\\raggedleft\\IfFileExists{${PHOTO_FILE}}{\\includegraphics[width=\\linewidth]{${PHOTO_FILE}}}{}\n\\end{minipage}`
-    : "";
-
-  return `\\documentclass[11pt,a4paper]{article}
-\\usepackage[utf8]{inputenc}
-\\usepackage[T1]{fontenc}
-${SAFE_FONTS}
-\\usepackage[top=1.1cm, bottom=1.1cm, left=1.5cm, right=1.5cm]{geometry}
-\\usepackage{titlesec}
-\\usepackage{enumitem}
-\\usepackage{graphicx}
-\\usepackage{xcolor}
-\\usepackage[hidelinks]{hyperref}
-${ATS_TEXT}
-
-\\definecolor{primary}{RGB}{0, 74, 84}
-\\titleformat{\\section}{\\scshape\\raggedright\\large\\color{primary}}{}{0em}{}[\\color{primary}\\titlerule]
-\\titlespacing*{\\section}{0pt}{8pt}{4pt}
-\\setlength{\\parindent}{0pt}
-\\newcommand{\\cvEntry}[4]{%
-  \\begin{tabular*}{\\textwidth}{@{}l@{\\extracolsep{\\fill}}r@{}}
-    \\textbf{\\color{primary}#1} & #2 \\\\
-    \\textit{\\small #3} & \\textit{\\small #4} \\\\
-  \\end{tabular*}\\par}
-
-\\begin{document}
-\\pagestyle{empty}
-
-\\noindent
-\\begin{minipage}[c]{${d.hasPhoto ? "0.76" : "1"}\\textwidth}
-${head}
-\\end{minipage}
-${photo}
-
-${sections.join("\n\n")}
-
-\\end{document}
-`;
+/** Libellé court d'un lien : nom pour LinkedIn, identifiant pour GitHub, domaine sinon. */
+function linkIcon(d: CvData, l: CvData["links"][number]): string {
+  const url = l.url.replace(/\\([%#])/g, "$1");
+  if (/linkedin\.com/i.test(url)) return `\\faLinkedin\\ \\href{${l.url}}{\\underline{${d.name}}}`;
+  if (/github\.com/i.test(url)) {
+    const user = url.replace(/\/+$/, "").split("/").pop() || l.label;
+    return `\\faGithub\\ \\href{${l.url}}{\\underline{${escapeLatex(user)}}}`;
+  }
+  return `\\faMousePointer\\ \\href{${l.url}}{\\underline{${escapeLatex(url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/+$/, ""))}}}`;
 }
 
-// ---------------------------------------------------------------------------
-// Modèle « Créatif » : bandeau de couleur, pastilles, photo ronde facultative.
-// Une seule colonne et du vrai texte : lisible par les logiciels de tri des candidatures.
-// ---------------------------------------------------------------------------
-const CREATIF_COLORS = `\\definecolor{primary}{RGB}{43, 45, 110}
-\\definecolor{accent}{RGB}{255, 111, 97}
-\\definecolor{soft}{RGB}{234, 235, 250}
-\\definecolor{muted}{RGB}{96, 100, 122}
-\\definecolor{headsub}{RGB}{255, 196, 187}`;
+/** « Anglais (C1) » ou « Anglais : C1 » → \textbf{Anglais}: C1 */
+function languageLine(l: string): string {
+  const m = l.match(/^(.+?)\s*(?:\((.+)\)|:\s*(.+))$/);
+  return m ? `\\textbf{${m[1].trim()}}: ${(m[2] || m[3]).trim()}` : `\\textbf{${l}}`;
+}
 
-function renderCreatif(d: CvData): string {
-  const bullets = (items: { bold?: string; text: string }[]) =>
-    items.length ? `\n\\begin{itemize}\n${items.map((b) => `  \\item ${bulletLine(b)}`).join("\n")}\n\\end{itemize}` : "";
-  const entry = (heading: string, dates: string, sub: string, place: string) =>
-    `{\\bfseries\\color{primary}${heading}}${dates ? `\\hfill{\\small\\color{muted}${dates}}` : ""}` +
-    (sub || place ? `\\\\\n{\\color{accent}\\bfseries ${sub}}${place ? `${sub ? "\\enspace" : ""}{\\small\\color{muted}${sub ? "\\textbar\\enspace " : ""}${place}}` : ""}` : "");
+function renderPhoto(d: CvData): string {
+  const plain = (b: { bold?: string; text: string }) => (b.bold ? `${b.bold} : ${b.text}` : b.text);
+  const items = (list: string[]) =>
+    list.length ? `\n\\resumeItemListStart\n${list.map((t) => `    \\resumeItem{${t}}`).join("\n")}\n\\resumeItemListEnd` : "";
 
+  const edu = d.education.map((e) =>
+    `    \\resumeSubheading\n      {${e.institution || e.degree}}{}\n      {${e.institution ? e.degree : ""}}{${e.year}}`
+  ).join("\n");
   const exp = d.experiences.map((e) =>
-    `${entry(e.role || e.company, e.dates, e.role ? e.company : "", e.location)}${bullets(e.bullets)}\\par`
-  ).join("\n\\vspace{5pt}\n");
-  const edu = d.education.map((e) => `${entry(e.degree, e.year, e.institution, "")}\\par`).join("\n\\vspace{3pt}\n");
+    `    \\resumeSubheading\n      {${e.company || e.role}}{${e.location}}\n      {${e.company ? e.role : ""}}{${e.dates}}${items(e.bullets.map(plain))}`
+  ).join("\n\n");
   const projects = d.projects.map((p) =>
-    `{\\bfseries\\color{primary}${p.name}}${projectTech(p) ? `\\enspace{\\small\\color{muted}\\textbar\\enspace ${projectTech(p)}}` : ""}${p.description ? `\\\\\n${p.description}` : ""}\\par`
-  ).join("\n\\vspace{3pt}\n");
-  const chips = (items: string[]) =>
-    `{\\raggedright\\setlength{\\fboxsep}{3pt}\\setlength{\\lineskiplimit}{3pt}\\setlength{\\lineskip}{5pt}\n${items.map((s) => `\\chip{${s}}`).join(" \n")}\\par}`;
+    `    \\resumeProjectHeading\n      {\\textbf{${p.name}}${projectTech(p) ? ` $|$ \\emph{${projectTech(p)}}` : ""}}{}${items(p.description ? [p.description] : [])}`
+  ).join("\n");
+
+  const lines = skillLines(d.skills);
+  let skills = "";
+  if (lines.some((l) => l.bold)) {
+    const cells = lines.map((l) => (l.bold ? `\\textbf{${l.bold}} : ${l.text}` : l.text));
+    const rows: string[] = [];
+    for (let i = 0; i < cells.length; i += 2) rows.push(`${cells[i]} &\n${cells[i + 1] || ""} \\\\`);
+    skills = `\\begin{tabularx}{\\textwidth}{X X}\n${rows.join("\n")}\n\\end{tabularx}`;
+  } else if (lines.length) {
+    skills = `\\begin{itemize}[leftmargin=0.15in, label={}]\n    \\small{\\item{${lines[0].text}}}\n\\end{itemize}`;
+  }
 
   const sections: string[] = [];
-  if (d.summary) sections.push(`\\section*{Profil}\n${d.summary}`);
-  if (exp) sections.push(`\\section*{Expériences}\n${exp}`);
-  if (d.skills.length) sections.push(`\\section*{Compétences}\n${chips(d.skills)}`);
-  if (edu) sections.push(`\\section*{Formations}\n${edu}`);
-  if (projects) sections.push(`\\section*{Projets}\n${projects}`);
-  if (d.languages.length) sections.push(`\\section*{Langues}\n${d.languages.join(" {\\color{accent}\\textbullet} ")}`);
+  if (edu) sections.push(`%-----------EDUCATION-----------\n\\section{Formations}\n  \\resumeSubHeadingListStart\n${edu}\n  \\resumeSubHeadingListEnd`);
+  if (exp) sections.push(`%-----------EXPERIENCE-----------\n\\section{Expériences Professionnelles}\n  \\resumeSubHeadingListStart\n${exp}\n  \\resumeSubHeadingListEnd`);
+  if (projects) sections.push(`%-----------PROJECTS-----------\n\\section{Projets}\n  \\resumeSubHeadingListStart\n${projects}\n  \\resumeSubHeadingListEnd`);
+  if (skills) sections.push(`%-----------SKILLS-----------\n\\section{Compétences}\n${skills}`);
+  if (d.languages.length) {
+    sections.push(`%-----------LANGUAGES-----------\n\\section{Langues}\n \\begin{itemize}[leftmargin=0.15in, label={}]\n    \\small{\n    \\item{\n     ${d.languages.map(languageLine).join(" \\\\\n     ")}\n    }}\n \\end{itemize}`);
+  }
 
-  const center = "[xshift=-3cm,yshift=-2.15cm]current page.north east";
-  const photo = d.hasPhoto
-    ? `\\IfFileExists{${PHOTO_FILE}}{%
-    \\begin{scope}
-      \\clip (${center}) circle (1.45cm);
-      \\node at (${center}) {\\includegraphics[width=2.9cm,height=2.9cm]{${PHOTO_FILE}}};
-    \\end{scope}
-    \\draw[white, line width=2.5pt] (${center}) circle (1.45cm);}{}`
-    : "";
+  const contact = [
+    d.email ? `\\faEnvelope\\ \\href{mailto:${d.emailUrl}}{\\underline{${d.email}}}` : "",
+    d.phone ? `\\faPhone\\ \\underline{${d.phone}}` : ""
+  ].filter(Boolean).join(" \\hspace{10pt}\n    ");
+  const web = [
+    ...d.links.map((l) => linkIcon(d, l)),
+    d.location ? `\\faMapMarker\\ \\underline{${d.location}}` : ""
+  ].filter(Boolean).join(" \\hspace{10pt}\n    ");
+  // Même structure que le fichier d'origine : lignes vides entre titre, coordonnées et liens
+  const top = [`\\par{\\LARGE \\textsc{${d.name}}}`, d.title ? `\\par{\\large {${d.title}}}` : ""].filter(Boolean).join(" \\\\\n    ");
   const head = [
-    `{\\color{white}\\fontsize{26}{30}\\selectfont\\bfseries ${d.name}}`,
-    d.title ? `{\\color{headsub}\\large\\bfseries ${d.title}}` : "",
-    contactLine(d, " \\enspace\\textbar\\enspace ") ? `{\\color{white}\\small ${contactLine(d, " \\enspace\\textbar\\enspace ")}}` : "",
-    d.links.length ? `{\\color{white}\\small ${linkLine(d, " \\enspace\\textbar\\enspace ")}}` : ""
-  ].filter(Boolean).join("\\\\[5pt]\n");
+    `${top} \\\\`,
+    contact ? `\\small ${contact}${web ? " \\\\" : ""}` : "",
+    web ? `${contact ? "" : "\\small "}${web}` : ""
+  ].filter(Boolean).join("\n\n    ");
 
-  return `\\documentclass[10pt,a4paper]{article}
+  return `%-------------------------------------------------------------------------------
+% CV — modèle « Photo » (d'après le modèle de Jake Gutierrez, licence MIT)
+%-------------------------------------------------------------------------------
+\\documentclass[a4paper,11pt]{article}
+
 \\usepackage[utf8]{inputenc}
 \\usepackage[T1]{fontenc}
-${SANS_FONTS}
-\\usepackage[top=0.9cm, bottom=1.1cm, left=1.5cm, right=1.5cm]{geometry}
-\\usepackage{xcolor}
-\\usepackage{tikz}
-\\usepackage{enumitem}
+\\IfFileExists{lmodern.sty}{\\usepackage{lmodern}}{}
+\\usepackage{latexsym}
+\\usepackage[empty]{fullpage}
 \\usepackage{titlesec}
-\\usepackage{graphicx}
+\\IfFileExists{fontawesome5.sty}{\\usepackage{fontawesome5}}{%
+  \\newcommand{\\faEnvelope}{}\\newcommand{\\faPhone}{}\\newcommand{\\faLinkedin}{}%
+  \\newcommand{\\faGithub}{}\\newcommand{\\faMousePointer}{}\\newcommand{\\faMapMarker}{}}
+\\usepackage[usenames,dvipsnames]{color}
+\\usepackage{enumitem}
 \\usepackage[hidelinks]{hyperref}
+\\usepackage{fancyhdr}
+\\usepackage{tabularx}
+\\usepackage{graphicx}
 ${ATS_TEXT}
 
-${CREATIF_COLORS}
-\\setlength{\\parindent}{0pt}
-\\titleformat{\\section}{\\color{primary}\\large\\bfseries}{}{0em}{{\\color{accent}\\rule{0.3cm}{0.3cm}}\\hspace{0.25cm}\\MakeUppercase}[\\vspace{-3pt}{\\color{soft}\\titlerule[1.2pt]}]
-\\titlespacing*{\\section}{0pt}{10pt}{5pt}
-\\setlist[itemize]{leftmargin=1.1em, label={\\color{accent}\\textbullet}, itemsep=1pt, topsep=2pt, parsep=0pt}
-\\newcommand{\\chip}[1]{\\colorbox{soft}{\\strut\\color{primary}\\small #1}}
+\\usepackage{geometry}
+\\geometry{top=0.4in, bottom=0.4in, left=0.6in, right=0.6in}
+
+\\definecolor{midnightgreen}{rgb}{0.0, 0.29, 0.33}
+
+\\pagestyle{fancy}
+\\fancyhf{}
+\\fancyfoot{}
+\\renewcommand{\\headrulewidth}{0pt}
+\\renewcommand{\\footrulewidth}{0pt}
+
+\\titleformat{\\section}{
+  \\vspace{-6pt}\\scshape\\raggedright\\large\\color{midnightgreen}
+}{}{0em}{}[\\color{midnightgreen}\\titlerule \\vspace{-6pt}]
+
+\\newcommand{\\resumeItem}[1]{
+  \\item\\small{
+    {#1 \\vspace{-2pt}}
+  }
+}
+\\newcommand{\\resumeSubheading}[4]{
+  \\vspace{-2pt}\\item
+    \\begin{tabular*}{0.97\\textwidth}[t]{l@{\\extracolsep{\\fill}}r}
+      \\textbf{\\color{MidnightBlue}#1} & #2 \\\\
+      \\textit{\\small#3} & \\textit{\\small #4} \\\\
+    \\end{tabular*}\\vspace{-7pt}
+}
+\\newcommand{\\resumeProjectHeading}[2]{
+    \\item
+    \\begin{tabular*}{0.97\\textwidth}{l@{\\extracolsep{\\fill}}r}
+      \\small#1 & #2 \\\\
+    \\end{tabular*}\\vspace{-7pt}
+}
+\\renewcommand\\labelitemii{$\\vcenter{\\hbox{\\tiny$\\bullet$}}$}
+\\newcommand{\\resumeSubHeadingListStart}{\\begin{itemize}[leftmargin=0.15in, label={}]}
+\\newcommand{\\resumeSubHeadingListEnd}{\\end{itemize}}
+\\newcommand{\\resumeItemListStart}{\\begin{itemize}}
+\\newcommand{\\resumeItemListEnd}{\\end{itemize}\\vspace{-5pt}}
 
 \\begin{document}
-\\pagestyle{empty}
-\\begin{tikzpicture}[remember picture, overlay]
-  \\fill[primary] (current page.north west) rectangle ([yshift=-4.3cm]current page.north east);
-  \\fill[accent] ([yshift=-4.3cm]current page.north west) rectangle ([yshift=-4.45cm]current page.north east);
-  ${photo}
-\\end{tikzpicture}%
-\\begin{minipage}[t][3.1cm][c]{${d.hasPhoto ? "\\dimexpr\\textwidth-4.3cm\\relax" : "\\textwidth"}}
-${head}
-\\end{minipage}
 
-\\vspace{0.75cm}
+%----------HEADING----------
+\\noindent
+\\begin{minipage}{${d.hasPhoto ? "0.75" : "1"}\\textwidth}
+    ${head}
+\\end{minipage}${d.hasPhoto ? `
+\\begin{minipage}{0.2\\textwidth}
+    \\IfFileExists{${PHOTO_FILE}}{\\includegraphics[width=10em]{${PHOTO_FILE}}}{}
+\\end{minipage}` : ""}
+
 ${sections.join("\n\n")}
 
 \\end{document}
@@ -435,22 +438,13 @@ export function generateFallbackLatex(candidate: any, job: any, template: CvTemp
   if (t === "moderncv") return renderModernCv(data);
   if (t === "compact") return renderArticle(data, true);
   if (t === "photo") return renderPhoto(data);
-  if (t === "creatif") return renderCreatif(data);
   return renderArticle(data);
 }
 
 // ---------------------------------------------------------------------------
-// Lettre de motivation : expéditeur, destinataire, objet, corps, signature ;
-// couleurs assorties au modèle de CV choisi. Le texte vient tel quel de l'utilisateur (ou de l'IA, relu).
+// Lettre de motivation : expéditeur, destinataire à droite, objet, corps, signature en gras.
+// Le texte vient tel quel de l'utilisateur (ou de l'IA, relu par l'utilisateur).
 // ---------------------------------------------------------------------------
-const LETTER_COLORS: Record<CvTemplate, string> = {
-  article: "30, 70, 100",
-  photo: "0, 74, 84",
-  creatif: "43, 45, 110",
-  moderncv: "30, 80, 160",
-  compact: "40, 40, 40"
-};
-
 const normName = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]/g, "");
 
 /** Paragraphes du corps de la lettre, sans la signature finale (ajoutée par le modèle). */
@@ -468,8 +462,10 @@ export function letterParagraphs(letter: string, fullName: string): string[] {
   return paras;
 }
 
-export function generateLetterLatex(candidate: any, job: any, letter: string, template: CvTemplate = "article", date: Date = new Date()): string {
-  const t = normalizeTemplate(template);
+/** « poste de Chargé… » / « poste d'Alternant… » */
+const deOrElided = (s: string) => (/^[aeiouyhàâäéèêëîïôöûùü]/i.test(s) ? `d'${s}` : `de ${s}`);
+
+export function generateLetterLatex(candidate: any, job: any, letter: string): string {
   const d = buildData(candidate, job, true);
   const body = letterParagraphs(letter, clean(candidate?.fullName))
     .map((p) => p.split("\n").map((l) => escapeLatex(l.trim())).join("\\\\\n"))
@@ -478,57 +474,54 @@ export function generateLetterLatex(candidate: any, job: any, letter: string, te
   const jobTitle = escapeLatex(clean(String(job?.title || "").replace(/^Candidature spontanée — /, "")));
   const subject = spontaneous
     ? `Candidature spontanée${jobTitle ? ` -- ${jobTitle}` : ""}`
-    : `Candidature au poste de ${jobTitle || "votre offre"}`;
-  const city = escapeLatex(clean(String(candidate?.location || "").split(/[,(]/)[0]));
-  const when = date.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+    : jobTitle ? `Candidature au poste ${deOrElided(jobTitle)}` : "Candidature";
 
+  // Un seul lien, comme dans une lettre classique : LinkedIn en priorité
+  const link = d.links.find((l) => /linkedin/i.test(l.url)) || d.links[0];
   const sender = [
     `{\\Large \\textbf{\\textcolor{primary}{${d.name}}}}`,
     d.location, d.phone, d.email,
-    ...d.links.map((l) => `\\href{${l.url}}{${l.label}}`)
+    link ? `\\href{${link.url}}{${link.label}}` : ""
   ].filter(Boolean).join("\\\\\n");
   const company = escapeLatex(clean(job?.company));
   const recipient = [
-    "\\textbf{À l'attention du service Recrutement}",
+    "\\textbf{À l'attention de l'équipe Recrutement}",
     company ? `\\textbf{${company}}` : "",
     escapeLatex(clean(job?.location))
   ].filter(Boolean).join("\\\\\n");
 
-  const creatif = t === "creatif";
   return `\\documentclass[11pt,a4paper]{article}
 \\usepackage[utf8]{inputenc}
 \\usepackage[T1]{fontenc}
-${creatif ? SANS_FONTS : SAFE_FONTS}
-\\usepackage[left=2cm, right=2cm, top=${creatif ? "2.4cm" : "2cm"}, bottom=2cm]{geometry}
+${SAFE_FONTS}
+\\usepackage[left=2cm, right=2cm, top=2cm, bottom=2cm]{geometry}
 \\usepackage{xcolor}
-${creatif ? "\\usepackage{tikz}\n" : ""}\\usepackage[hidelinks]{hyperref}
+\\usepackage[hidelinks]{hyperref}
 ${ATS_TEXT}
 
-${creatif ? CREATIF_COLORS : `\\definecolor{primary}{RGB}{${LETTER_COLORS[t]}}`}
+\\definecolor{primary}{RGB}{0, 51, 102}
+
 \\setlength{\\parindent}{0pt}
 \\setlength{\\parskip}{0.8em}
 
 \\begin{document}
 \\pagestyle{empty}
-${creatif ? `\\begin{tikzpicture}[remember picture, overlay]
-  \\fill[primary] (current page.north west) rectangle ([yshift=-1cm]current page.north east);
-  \\fill[accent] ([yshift=-1cm]current page.north west) rectangle ([yshift=-1.12cm]current page.north east);
-\\end{tikzpicture}%
-` : ""}${sender}
 
-\\vspace{0.4cm}
+% Expéditeur
+${sender}
 
+\\vspace{0.5cm}
+
+% Destinataire
 \\begin{flushright}
 ${recipient}
 \\end{flushright}
 
-\\begin{flushright}
-${city ? `${city}, le` : "Le"} ${escapeLatex(when)}
-\\end{flushright}
+\\vspace{0.5cm}
 
 \\textbf{Objet : ${subject}}
 
-\\vspace{0.2cm}
+\\vspace{0.3cm}
 
 ${body}
 

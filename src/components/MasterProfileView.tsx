@@ -215,7 +215,7 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
                     </Button>
                   )}
                 </div>
-                <p className="text-xs text-slate-500">Facultative. Affichée seulement sur les CV « Photo » et « Créatif ». Jamais envoyée à l’IA.</p>
+                <p className="text-xs text-slate-500">Facultative. Affichée seulement sur le CV « Photo ». Jamais envoyée à l’IA.</p>
               </div>
               <input
                 ref={photoInputRef}

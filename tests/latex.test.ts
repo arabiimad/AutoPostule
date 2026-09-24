@@ -40,21 +40,21 @@ const TINY_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0
 const withPhoto = { ...candidate, photo: `data:image/jpeg;base64,${TINY_JPEG.toString('base64')}` };
 
 test('modèles : liste partagée et valeur inconnue ramenée au Classique', () => {
-  assert.deepEqual(CV_TEMPLATE_IDS, ['article', 'photo', 'creatif', 'moderncv', 'compact']);
-  assert.equal(normalizeCvTemplate('creatif'), 'creatif');
+  assert.deepEqual(CV_TEMPLATE_IDS, ['article', 'photo', 'moderncv', 'compact']);
+  assert.equal(normalizeCvTemplate('photo'), 'photo');
+  // Ancien modèle retiré : un profil qui l'avait choisi revient au Classique
+  assert.equal(normalizeCvTemplate('creatif'), 'article');
   assert.equal(normalizeCvTemplate('canva'), 'article');
 });
 
-test('photo : affichée seulement par les modèles Photo et Créatif, et seulement si le profil en a une', () => {
-  for (const template of ['photo', 'creatif'] as const) {
-    assert.match(generateFallbackLatex(withPhoto, job, template), new RegExp(`\\\\IfFileExists\\{${PHOTO_FILE.replace('.', '\\.')}\\}`));
-    assert.doesNotMatch(generateFallbackLatex(candidate, job, template), /includegraphics/);
-  }
+test('photo : affichée seulement par le modèle Photo, et seulement si le profil en a une', () => {
+  assert.match(generateFallbackLatex(withPhoto, job, 'photo'), new RegExp(`\\\\IfFileExists\\{${PHOTO_FILE.replace('.', '\\.')}\\}\\{\\\\includegraphics\\[width=10em\\]`));
+  assert.doesNotMatch(generateFallbackLatex(candidate, job, 'photo'), /includegraphics/);
   for (const template of ['article', 'moderncv', 'compact'] as const) {
     assert.doesNotMatch(generateFallbackLatex(withPhoto, job, template), /includegraphics/);
   }
   // Le serveur ne reçoit que l'indicateur : la mise en page reste la même
-  assert.match(generateFallbackLatex(withoutPhoto(withPhoto), job, 'creatif'), /includegraphics/);
+  assert.match(generateFallbackLatex(withoutPhoto(withPhoto), job, 'photo'), /includegraphics/);
 });
 
 test('photo : jamais transmise à l\'IA ni aux garde-fous', () => {
@@ -77,13 +77,45 @@ test('photo : seul un JPEG raisonnable est accepté à la compilation', () => {
   assert.equal(decodeJpegPhoto(undefined), null);
 });
 
-test('modèle Créatif : bandeau, pastilles de compétences, une seule colonne, texte extractible', () => {
-  const tex = generateFallbackLatex(candidate, job, 'creatif');
-  assert.match(tex, /\\fill\[primary\]/);
-  assert.match(tex, /\\chip\{Canva\}/);
-  assert.match(tex, /\\pdfgentounicode=1/);
-  assert.match(tex, /\\DisableLigatures/);
-  assert.doesNotMatch(tex, /multicol|paracol|\\begin\{tabular/);
+const rich = {
+  ...candidate,
+  phone: '06 11 22 33 44',
+  location: 'Lyon',
+  linkedinUrl: 'https://linkedin.com/in/sarah-benali',
+  githubUrl: 'https://github.com/sbenali',
+  summary: 'Profil orienté planification et efficacité',
+  skills: ['Création : Canva, Photoshop', 'Bureautique : Excel, Word', 'SEO'],
+  education: [{ degree: 'Master Communication', institution: 'Université Lyon 2', year: '2022 -- 2024' }],
+  languages: ['Anglais (C1)', 'Français : natif']
+};
+
+test('modèle Classique : même structure que le CV fourni (en-tête, compétences par catégorie, formations, langues)', () => {
+  const tex = generateFallbackLatex(rich, job, 'article', { tailored: true });
+  assert.match(tex, /\\definecolor\{primary\}\{RGB\}\{30, 70, 100\}/);
+  assert.match(tex, /\{\\Huge \\textbf\{Sarah Benali\}\}/);
+  assert.match(tex, /s@b\.fr \| Lyon \| 06 11 22 33 44/);
+  assert.match(tex, /\\item \\textbf\{Création :\} Canva, Photoshop/);
+  assert.match(tex, /\\item SEO/);
+  assert.match(tex, /\\item \\textbf\{2022 -- 2024 :\} Master Communication - \\textit\{Université Lyon 2\}/);
+  assert.match(tex, /\\item \\textbf\{Langues :\} Anglais \(C1\) \\hfill Français : natif/);
+  const order = ['PROFIL', 'EXPÉRIENCES PROFESSIONNELLES', 'COMPÉTENCES', 'FORMATIONS', 'LANGUES'].map((k) => tex.indexOf(`section*{${k}}`));
+  assert.deepEqual([...order].sort((x, y) => x - y), order);
+});
+
+test('modèle Photo : même structure que le CV fourni (formations d\'abord, icônes, sous-titres, langues)', () => {
+  const tex = generateFallbackLatex({ ...rich, photo: withPhoto.photo }, job, 'photo', { tailored: true });
+  assert.match(tex, /\\definecolor\{midnightgreen\}\{rgb\}\{0\.0, 0\.29, 0\.33\}/);
+  assert.match(tex, /\\begin\{minipage\}\{0\.75\\textwidth\}/);
+  assert.match(tex, /\\par\{\\LARGE \\textsc\{Sarah Benali\}\}/);
+  assert.match(tex, /\\faEnvelope\\ \\href\{mailto:s@b\.fr\}\{\\underline\{s@b\.fr\}\}/);
+  assert.match(tex, /\\faLinkedin\\ \\href\{https:\/\/linkedin\.com\/in\/sarah-benali\}\{\\underline\{Sarah Benali\}\}/);
+  assert.match(tex, /\\faGithub\\ \\href\{https:\/\/github\.com\/sbenali\}\{\\underline\{sbenali\}\}/);
+  assert.match(tex, /\\faMapMarker\\ \\underline\{Lyon\}/);
+  assert.match(tex, /\\resumeSubheading\n\s+\{Lumen \\& Co\}\{\}\n\s+\{Chargée com\}\{2022 -- Présent\}/);
+  assert.match(tex, /\\resumeItem\{Pilotage : 3 prestataires\}/);
+  assert.match(tex, /\\textbf\{Création\} : Canva, Photoshop &\n\\textbf\{Bureautique\} : Excel, Word/);
+  assert.match(tex, /\\textbf\{Anglais\}: C1 \\\\\n\s+\\textbf\{Français\}: natif/);
+  assert.ok(tex.indexOf('section{Formations}') < tex.indexOf('section{Expériences Professionnelles}'), 'formations avant expériences');
 });
 
 const letter = `Madame, Monsieur,
@@ -102,18 +134,18 @@ test('lettre : paragraphes sans la signature (ajoutée par le modèle)', () => {
 });
 
 test('lettre : expéditeur, destinataire, objet, corps échappé, signature', () => {
-  const tex = generateLetterLatex({ ...candidate, location: 'Lyon (69)', phone: '06 11 22 33 44' }, { ...job, location: 'Paris' }, letter, 'article', new Date('2026-09-24T12:00:00Z'));
+  const tex = generateLetterLatex({ ...candidate, location: 'Lyon (69)', phone: '06 11 22 33 44' }, { ...job, location: 'Paris' }, letter);
   assert.match(tex, /\\textbf\{\\textcolor\{primary\}\{Sarah Benali/);
   assert.match(tex, /06 11 22 33 44/);
-  assert.match(tex, /À l'attention du service Recrutement\}\\\\\n\\textbf\{Acme\}\\\\\nParis/);
-  assert.match(tex, /Lyon, le 24 septembre 2026/);
+  assert.match(tex, /\\begin\{flushright\}\n\\textbf\{À l'attention de l'équipe Recrutement\}\\\\\n\\textbf\{Acme\}\\\\\nParis\n\\end\{flushright\}/);
+  assert.match(tex, /\\definecolor\{primary\}\{RGB\}\{0, 51, 102\}/);
   assert.match(tex, /Objet : Candidature au poste de Chargé de com/);
+  assert.match(generateLetterLatex(candidate, { ...job, title: 'Alternant Business Process Manager' }, letter), /Objet : Candidature au poste d'Alternant Business Process Manager/);
   assert.match(tex, /Lumen \\& Co/);
   assert.equal((tex.match(/Sarah Benali/g) || []).length, 2, 'nom : en-tête + signature, pas de doublon');
   assert.match(tex, /\\begin\{document\}[\s\S]*\\end\{document\}/);
-  const spontaneous = generateLetterLatex(candidate, { company: 'Acme', title: 'Candidature spontanée — Graphiste', isSpontaneous: true }, letter, 'creatif');
+  const spontaneous = generateLetterLatex(candidate, { company: 'Acme', title: 'Candidature spontanée — Graphiste', isSpontaneous: true }, letter);
   assert.match(spontaneous, /Objet : Candidature spontanée -- Graphiste/);
-  assert.match(spontaneous, /\\fill\[primary\]/);
 });
 
 test('compilation réelle des modèles et des lettres (si un compilateur est installé)', async (t) => {
@@ -122,16 +154,16 @@ test('compilation réelle des modèles et des lettres (si un compilateur est ins
   for (const template of CV_TEMPLATE_IDS) {
     const r = await compileLatex(generateFallbackLatex(full, job, template));
     assert.ok(r.pdf && r.pdf.subarray(0, 4).toString() === '%PDF', `${template}: ${r.error}`);
-    const l = await compileLatex(generateLetterLatex(full, job, letter, template));
-    assert.ok(l.pdf && l.pdf.subarray(0, 4).toString() === '%PDF', `lettre ${template}: ${l.error}`);
   }
+  const l = await compileLatex(generateLetterLatex(full, job, letter));
+  assert.ok(l.pdf && l.pdf.subarray(0, 4).toString() === '%PDF', `lettre : ${l.error}`);
 });
 
-test('ATS : le texte du PDF Créatif est extractible dans l\'ordre, sans ligatures (si pdftotext est installé)', async (t) => {
+test('ATS : le texte du PDF est extractible dans l\'ordre, sans ligatures (si pdftotext est installé)', async (t) => {
   if (!(await detectLatexCompiler())) return t.skip('aucun compilateur LaTeX');
   if (spawnSync('pdftotext', ['-v']).error) return t.skip('pdftotext absent');
   const full = { ...candidate, summary: 'Profil orienté planification et efficacité' };
-  const r = await compileLatex(generateFallbackLatex(full, job, 'creatif'));
+  const r = await compileLatex(generateFallbackLatex(full, job, 'article'));
   assert.ok(r.pdf, r.error);
   const text = spawnSync('pdftotext', ['-', '-'], { input: r.pdf }).stdout.toString();
   assert.match(text, /planification et efficacité/);

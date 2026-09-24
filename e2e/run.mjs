@@ -173,14 +173,14 @@ try {
   await page.getByRole('button', { name: /Compact/ }).first().click();
   await page.waitForTimeout(1200);
   check('changement de modèle sans perdre le contenu', (await page.getByLabel('Code source LaTeX du CV').inputValue()).includes('10pt') && (await page.getByLabel('Code source LaTeX du CV').inputValue()).includes('Titre modifié e2e'));
-  await page.getByRole('button', { name: 'Créatif', exact: true }).click();
+  await page.getByRole('button', { name: 'Photo', exact: true }).click();
   await page.waitForTimeout(1200);
-  const creatif = await page.getByLabel('Code source LaTeX du CV').inputValue();
-  check('modèle Créatif : bandeau, pastilles, photo du profil', creatif.includes('\\fill[primary]') && creatif.includes('\\chip{') && creatif.includes('photo.jpg') && creatif.includes('Titre modifié e2e'));
+  const withPhotoTex = await page.getByLabel('Code source LaTeX du CV').inputValue();
+  check('modèle Photo : photo du profil, formations d’abord', withPhotoTex.includes('photo.jpg') && withPhotoTex.includes('\\resumeSubheading') && withPhotoTex.includes('Titre modifié e2e'));
   await page.getByRole('tab', { name: 'Lettre de motivation' }).click();
   const [letterTex] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Lettre .tex' }).click()]);
   const letterCode = fs.readFileSync(await letterTex.path(), 'utf8');
-  check('lettre mise en page (expéditeur, objet, signature)', /Objet : Candidature/.test(letterCode) && /Karim Dupont/.test(letterCode) && /fill\[primary\]/.test(letterCode));
+  check('lettre mise en page (expéditeur, objet, signature)', /Objet : Candidature/.test(letterCode) && /Karim Dupont/.test(letterCode) && /l'équipe Recrutement/.test(letterCode));
   if (await page.getByRole('button', { name: 'Lettre en PDF' }).count()) {
     const [letterPdf] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.getByRole('button', { name: 'Lettre en PDF' }).click()]);
     check('lettre en PDF', fs.readFileSync(await letterPdf.path()).subarray(0, 4).toString() === '%PDF');
