@@ -6,7 +6,7 @@ import { kv } from "./store.ts";
  */
 export function createRateLimiter(name: string, maxRequests: number, windowMs: number) {
   return async (req: any, res: any, next: any) => {
-    // Compte Firebase vérifié si disponible, sinon req.ip (et non l'en-tête X-Forwarded-For brut, falsifiable)
+    // Compte vérifié si disponible, sinon req.ip (et non l'en-tête X-Forwarded-For brut, falsifiable)
     const who = req.uid ? `uid:${req.uid}` : `ip:${String(req.ip || "unknown")}`;
     const windowIndex = Math.floor(Date.now() / windowMs);
     try {

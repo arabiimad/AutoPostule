@@ -13,7 +13,7 @@ import {
   X
 } from 'lucide-react';
 import { UserProfile, ContractType } from '../types';
-import { User } from 'firebase/auth';
+import type { AppUser as User } from '../data/cloud';
 import { Button, PageHeader, cx } from './ui';
 
 interface MasterProfileViewProps {

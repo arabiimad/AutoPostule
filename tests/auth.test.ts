@@ -1,6 +1,21 @@
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { authMiddleware } from '../server/auth.ts';
+
+// Faux service Supabase Auth : « bon-jeton » → utilisateur, sinon 401
+let server: http.Server;
+before(async () => {
+  server = http.createServer((req, res) => {
+    const ok = req.url === '/auth/v1/user' && req.headers.authorization === 'Bearer bon-jeton' && !!req.headers.apikey;
+    res.writeHead(ok ? 200 : 401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(ok ? { id: 'user-123', email: 'a@b.fr' } : { msg: 'invalid' }));
+  }).listen(0);
+  await new Promise((r) => server.once('listening', r));
+  process.env.SUPABASE_URL = `http://127.0.0.1:${(server.address() as any).port}`;
+  process.env.SUPABASE_ANON_KEY = 'cle-publique';
+});
+after(() => server.close());
 
 function run(mode: string, authorization?: string) {
   process.env.AUTH_MODE = mode;
@@ -18,6 +33,10 @@ test('mode optional : requête sans jeton acceptée', async () => {
 
 test('mode required : requête sans jeton refusée (401)', async () => {
   assert.equal((await run('required')).status, 401);
+});
+
+test('jeton valide : compte identifié', async () => {
+  assert.deepEqual(await run('required', 'Bearer bon-jeton'), { next: true, uid: 'user-123' });
 });
 
 test('jeton invalide refusé (401), même en mode optional', async () => {

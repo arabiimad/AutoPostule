@@ -30,7 +30,7 @@ npm start                 # sert dist/ ; port = variable PORT (3000 par défaut)
 | `npm run test:e2e` | Parcours complet dans un vrai navigateur, sources simulées (après `npm run build` et `npx playwright install chromium`) |
 | `npm run check:sources -- "développeur web" Lyon alternance` | Teste vos vraies clés d'API : offres par source, erreurs, avertissements |
 | `npm run check:ai` | Teste la clé Gemini (modèles accessibles) et la génération d'un CV d'exemple |
-| `npm run deploy:rules` | Déploie les règles Firestore |
+| `npm run test:supabase` | Test réel contre votre projet Supabase : connexion, profil, candidatures, cloisonnement RLS (comptes de test créés puis supprimés) |
 
 Intégration continue : déplacez `ci/github-ci.yml` vers `.github/workflows/ci.yml` (types, tests, build et tests de bout en bout à chaque push sur GitHub).
 
@@ -71,12 +71,23 @@ Dans le Studio : onglet **Contenu** (retouche de chaque puce par l'IA avec des c
 
 Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accès à l'API. Pour utiliser `gemini-3.1-pro-preview` via l'API, activez la facturation du projet Google Cloud lié à la clé (environ 2 $ / 12 $ par million de jetons en entrée / sortie, soit quelques centimes par CV). Sans facturation, l'application passe automatiquement sur Flash.
 
+## Comptes et base de données (Supabase)
+
+Comptes (e-mail + mot de passe, Google en option), profils et candidatures sont stockés dans Supabase (PostgreSQL, région UE). Chaque utilisateur ne voit que ses données (règles RLS). Sans configuration, l'application fonctionne en session locale (données dans le navigateur).
+
+1. Créez un projet sur supabase.com (région Europe).
+2. SQL Editor : exécutez `supabase/migrations/001_init.sql` (tables `profiles`, `applications`, `subscriptions`, `usage` + règles RLS).
+3. `.env` : `SUPABASE_URL`, `SUPABASE_ANON_KEY` (clé publishable), `SUPABASE_SERVICE_ROLE_KEY` (serveur uniquement, jamais dans le navigateur), et pour l'interface `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
+4. Authentication → URL Configuration : « Site URL » = l'adresse publique de l'application (liens de confirmation et de réinitialisation).
+5. Production : configurez un SMTP (Authentication → Emails) ; le service d'e-mail par défaut de Supabase est limité à quelques envois par heure.
+6. Connexion Google (facultatif) : Authentication → Providers → Google, puis `VITE_AUTH_GOOGLE=on`.
+
 ## Autres variables
 
 | Variable | Rôle |
 |---|---|
 | `GEMINI_API_KEY` | IA (analyse du CV, CV et lettre sur mesure, kit d'entretien). Sans clé : modèles standards. |
-| `AUTH_MODE` | `off`, `optional` (défaut) ou `required` : vérification des comptes Firebase côté serveur |
+| `AUTH_MODE` | `off`, `optional` (défaut) ou `required` : vérification des comptes (jeton Supabase) côté serveur |
 | `PORT` | Port d'écoute |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Facultatif : cache, limite de débit et quotas partagés entre plusieurs serveurs (Redis Upstash) |
 | `PDF_CONCURRENCY` | Nombre maximal de PDF Web générés en parallèle (3 par défaut) |

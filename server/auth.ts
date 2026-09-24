@@ -1,46 +1,45 @@
 /**
- * Vérification des utilisateurs Firebase côté serveur.
+ * Vérification des comptes côté serveur (Supabase Auth).
  *
  * AUTH_MODE (variable d'environnement) :
  *  - "off"      : aucune vérification (développement).
- *  - "optional" : (défaut) le jeton est vérifié s'il est présent ; la limite de débit se fait alors par compte.
- *  - "required" : les routes IA exigent un compte Firebase connecté (les sessions locales n'y ont plus accès).
+ *  - "optional" : (défaut) le jeton est vérifié s'il est présent ; limites et quotas se font alors par compte.
+ *  - "required" : les routes IA exigent un compte connecté.
  *
- * La vérification n'a besoin que de l'identifiant du projet (pas de compte de service) :
- * firebase-admin télécharge les certificats publics de Google pour valider la signature du jeton.
+ * Le jeton de session est validé auprès de Supabase (GET /auth/v1/user) ; le résultat est gardé
+ * en cache 60 s pour ne pas interroger Supabase à chaque requête.
  */
-import fs from "fs";
-import path from "path";
+import { createHash } from "node:crypto";
 
-type Verifier = (token: string) => Promise<{ uid: string }>;
+type Verifier = (token: string) => Promise<{ uid: string; email?: string }>;
 
-let verifierPromise: Promise<Verifier | null> | null = null;
+const cache = new Map<string, { uid: string; email?: string; until: number }>();
 
-function readProjectId(): string | undefined {
-  if (process.env.FIREBASE_PROJECT_ID) return process.env.FIREBASE_PROJECT_ID;
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "firebase-applet-config.json"), "utf8"));
-    return cfg.projectId;
-  } catch {
-    return undefined;
-  }
+function supabaseConfig() {
+  const url = (process.env.SUPABASE_URL || "").replace(/\/$/, "");
+  const key = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  return url && key ? { url, key } : null;
 }
 
-async function loadVerifier(): Promise<Verifier | null> {
-  try {
-    const appMod: any = await import("firebase-admin/app");
-    const authMod: any = await import("firebase-admin/auth");
-    const projectId = readProjectId();
-    const app = appMod.getApps().length ? appMod.getApp() : appMod.initializeApp({ projectId });
-    const auth = authMod.getAuth(app);
-    return async (token: string) => {
-      const decoded = await auth.verifyIdToken(token);
-      return { uid: decoded.uid };
-    };
-  } catch (e: any) {
-    console.warn("[Auth] firebase-admin indisponible (lancez « npm install ») :", e?.message || e);
-    return null;
-  }
+function getVerifier(): Verifier | null {
+  const cfg = supabaseConfig();
+  if (!cfg) return null;
+  return async (token: string) => {
+    const k = createHash("sha256").update(token).digest("hex");
+    const hit = cache.get(k);
+    if (hit && hit.until > Date.now()) return { uid: hit.uid, email: hit.email };
+    const r = await fetch(`${cfg.url}/auth/v1/user`, {
+      headers: { apikey: cfg.key, Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000)
+    });
+    if (r.status === 401 || r.status === 403) throw new Error("INVALID_TOKEN");
+    if (!r.ok) throw new Error(`AUTH_UNAVAILABLE_${r.status}`);
+    const user: any = await r.json();
+    if (!user?.id) throw new Error("INVALID_TOKEN");
+    if (cache.size > 5000) cache.clear();
+    cache.set(k, { uid: user.id, email: user.email, until: Date.now() + 60_000 });
+    return { uid: user.id, email: user.email };
+  };
 }
 
 export function getAuthMode(): "off" | "optional" | "required" {
@@ -48,7 +47,7 @@ export function getAuthMode(): "off" | "optional" | "required" {
   return m === "off" || m === "required" ? m : "optional";
 }
 
-/** Middleware Express : renseigne req.uid si un jeton valide est fourni. */
+/** Middleware Express : renseigne req.uid (et req.email) si un jeton valide est fourni. */
 export function authMiddleware() {
   const mode = getAuthMode();
   return async (req: any, res: any, next: any) => {
@@ -63,8 +62,7 @@ export function authMiddleware() {
       return next();
     }
 
-    verifierPromise ||= loadVerifier();
-    const verify = await verifierPromise;
+    const verify = getVerifier();
     if (!verify) {
       if (mode === "required") {
         return res.status(503).json({ success: false, error: "Vérification des comptes indisponible sur le serveur." });
@@ -72,10 +70,16 @@ export function authMiddleware() {
       return next();
     }
     try {
-      const { uid } = await verify(token);
+      const { uid, email } = await verify(token);
       req.uid = uid;
+      req.email = email;
       return next();
-    } catch {
+    } catch (e: any) {
+      if (String(e?.message).startsWith("AUTH_UNAVAILABLE") || e?.name === "TimeoutError") {
+        // Service de comptes injoignable : on ne bloque pas en mode optional
+        if (mode === "required") return res.status(503).json({ success: false, error: "Service de comptes momentanément indisponible. Réessayez." });
+        return next();
+      }
       return res.status(401).json({ success: false, error: "Session expirée : reconnectez-vous." });
     }
   };

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, FileText, KanbanSquare, MessagesSquare, UserRound, LogOut, Bot, ChevronDown, Upload, Bell, Sun, Moon, Monitor } from 'lucide-react';
 import { getThemePref, setThemePref, type ThemePref } from '../utils/theme';
-import { User } from 'firebase/auth';
+import type { AppUser as User } from '../data/cloud';
 import { Button, cx } from './ui';
 
 export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile';
