@@ -1,19 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import {
-  onAuthStateChanged,
-  signOut,
-  User
-} from 'firebase/auth';
-import {
-  doc,
-  getDoc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  collection,
-  onSnapshot
-} from 'firebase/firestore';
-import { auth, db } from './firebase';
+import * as cloud from './data/cloud';
+import { isCloudUser, type AppUser as User } from './data/cloud';
 import { Header } from './components/Header';
 import { JobSearchView } from './components/jobs/JobSearchView';
 import { LatexStudioModal } from './components/LatexStudioModal';
@@ -22,6 +9,10 @@ import { KanbanCrmView } from './components/KanbanCrmView';
 import { InterviewCockpitModal } from './components/InterviewCockpitModal';
 import { MasterProfileView } from './components/MasterProfileView';
 import { AuthModal } from './components/AuthModal';
+import { PricingView } from './components/PricingView';
+import { UpgradeModal } from './components/UpgradeModal';
+import { track, identifyUser } from './utils/monitoring';
+import { fetchUsage, QUOTA_EVENT, type AccountUsage, type QuotaEventDetail } from './data/account';
 import { CvUploadModal } from './components/CvUploadModal';
 import { EMPTY_PROFILE } from './mockData';
 import { UserProfile, JobOffer, Application, AgentLog, ApplicationStatus, InterviewPrepKit, CvTemplate, SavedSearch, DossierVersion } from './types';
@@ -62,9 +53,6 @@ function writeJson(key: string, value: unknown) {
     // stockage indisponible (navigation privée…)
   }
 }
-
-/** Un utilisateur Firebase réel (≠ session locale « local-usr-… »). */
-const isCloudUser = (u: User | null): u is User => !!u && !u.uid.startsWith('local-');
 
 /** Complète un profil partiel avec des valeurs VIDES (jamais avec les données de quelqu'un d'autre). */
 function withProfileDefaults(p: Partial<UserProfile>): UserProfile {
@@ -154,15 +142,56 @@ export default function App() {
 
   const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
 
-  // Nom / titre saisis à l'inscription, appliqués quel que soit l'ordre d'arrivée
-  // (onAuthStateChanged peut se déclencher avant ou après le retour d'AuthModal)
-  const pendingSignupRef = useRef<{ uid: string; fullName?: string; title?: string } | null>(null);
-
   // Références à jour pour les callbacks asynchrones
   const currentUserRef = useRef<User | null>(null);
   currentUserRef.current = currentUser;
   const profileRef = useRef<UserProfile>(userProfile);
   profileRef.current = userProfile;
+  const applicationsRef = useRef<Application[]>(applications);
+  applicationsRef.current = applications;
+
+  // Forfait et consommation (freemium)
+  const [accountUsage, setAccountUsage] = useState<AccountUsage | null>(null);
+  const [quotaDetail, setQuotaDetail] = useState<QuotaEventDetail | null>(null);
+  const [paymentStatus] = useState<string | null>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const v = p.get('paiement');
+    if (v) {
+      p.delete('paiement');
+      const qs = p.toString();
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+    }
+    return v;
+  });
+  const refreshUsage = () => fetchUsage().then(setAccountUsage).catch(() => {});
+  useEffect(() => {
+    refreshUsage();
+  }, [currentUser?.uid]);
+  useEffect(() => {
+    if (currentTab === 'pricing') {
+      refreshUsage();
+      track('pricing_viewed');
+    }
+  }, [currentTab]);
+  useEffect(() => {
+    identifyUser(isCloudUser(currentUser) ? currentUser.uid : null, accountUsage?.plan);
+  }, [currentUser?.uid, accountUsage?.plan]);
+  useEffect(() => {
+    // Après un paiement, le webhook Stripe active Premium en quelques secondes
+    if (paymentStatus !== 'ok') return;
+    const t = [3000, 8000, 15000].map((ms) => setTimeout(refreshUsage, ms));
+    return () => t.forEach(clearTimeout);
+  }, [paymentStatus]);
+  useEffect(() => {
+    const onQuota = (e: Event) => {
+      const detail = (e as CustomEvent<QuotaEventDetail>).detail;
+      setQuotaDetail(detail);
+      track('quota_exceeded', { kind: detail?.kind, plan: detail?.plan });
+      refreshUsage();
+    };
+    window.addEventListener(QUOTA_EVENT, onQuota);
+    return () => window.removeEventListener(QUOTA_EVENT, onQuota);
+  }, []);
 
   /** Change d'onglet et l'inscrit dans l'historique du navigateur (bouton Précédent). */
   const setCurrentTab = (tab: TabId) => {
@@ -181,7 +210,7 @@ export default function App() {
     setAgentLogs(prev => [{ id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, timestamp: nowTime(), ...log }, ...prev].slice(0, 100));
   };
 
-  /** Charge une session locale (sans compte Firebase) à partir du stockage du navigateur. */
+  /** Charge une session locale (sans compte en ligne) à partir du stockage du navigateur. */
   const loadLocalSession = () => {
     const stored = readJson<{ uid: string; displayName?: string; email?: string }>(LOCAL_USER_KEY);
     if (stored?.uid) {
@@ -216,12 +245,12 @@ export default function App() {
   useEffect(() => {
     const s = initialSearch.current;
     handleFetchLiveJobs(s.query, s.contractType, s.location, s.radius);
-    // Affichage immédiat des données locales (session locale / invité) sans attendre la réponse de Firebase Auth
-    if (!auth.currentUser) loadLocalSession();
+    // Affichage immédiat des données locales (session locale / invité) sans attendre le service de comptes
+    loadLocalSession();
 
     let unsubApps: (() => void) | null = null;
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = cloud.onAuthChange(async (user) => {
       if (unsubApps) {
         unsubApps();
         unsubApps = null;
@@ -234,51 +263,34 @@ export default function App() {
 
       setCurrentUser(user);
 
-      // App est le SEUL à créer le profil Firestore (avant : App et AuthModal écrivaient en même temps)
+      // App est le SEUL à créer le profil en ligne
       try {
-        const userDocRef = doc(db, 'users', user.uid);
-        const docSnap = await getDoc(userDocRef);
+        const stored = await cloud.loadProfile(user.uid);
         let profile: UserProfile;
-        const pending = pendingSignupRef.current?.uid === user.uid ? pendingSignupRef.current : null;
-        if (docSnap.exists()) {
-          profile = withProfileDefaults(docSnap.data() as UserProfile);
+        if (stored) {
+          profile = withProfileDefaults(stored);
         } else {
           profile = withProfileDefaults({
             userId: user.uid,
-            fullName: pending?.fullName || user.displayName || '',
-            title: pending?.title || '',
+            fullName: user.displayName || '',
+            title: user.title || '',
             email: user.email || ''
           });
-          await setDoc(userDocRef, profile);
-        }
-        // Si l'inscription a fourni un nom pendant le chargement, il n'est pas écrasé par une valeur vide
-        if (pending && (!profile.fullName || !profile.title)) {
-          profile = { ...profile, fullName: profile.fullName || pending.fullName || '', title: profile.title || pending.title || '' };
-          await setDoc(userDocRef, profile, { merge: true });
+          await cloud.saveProfile(user.uid, profile);
         }
         setUserProfile(profile);
         if (!profile.fullName || profile.skills.length === 0 || profile.experiences.length === 0) {
-          setIsMandatoryOnboarding(!docSnap.exists());
+          setIsMandatoryOnboarding(!stored);
           setCvUploadModalOpen(true);
         }
       } catch (e) {
-        console.error('Firestore user sync error:', e);
+        console.error('Profile sync error:', e);
         showToast('Profil non chargé', 'Impossible de lire votre profil en ligne. Vérifiez votre connexion.', true);
       }
 
-      try {
-        const appsRef = collection(db, 'users', user.uid, 'applications');
-        unsubApps = onSnapshot(appsRef, (snap) => {
-          const loaded: Application[] = [];
-          snap.forEach(d => loaded.push(d.data() as Application));
-          loaded.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-          setApplications(loaded);
-        }, (err) => {
-          console.error('Firestore applications sync error:', err);
-        });
-      } catch (err) {
-        console.error('Firestore applications sync error:', err);
-      }
+      unsubApps = cloud.subscribeApplications(user.uid, setApplications, (err) => {
+        console.error('Applications sync error:', err);
+      });
     });
 
     return () => {
@@ -292,7 +304,7 @@ export default function App() {
       localStorage.removeItem(LOCAL_USER_KEY);
     } catch {}
     try {
-      if (auth.currentUser) await signOut(auth);
+      if (isCloudUser(currentUserRef.current)) await cloud.signOut();
     } catch (e) {
       console.error('Logout error:', e);
     }
@@ -327,6 +339,7 @@ export default function App() {
         hasMore: !!data.hasMore
       });
       markSavedSearchSeen({ query, contractType, location, radius }, Array.isArray(data.jobs) ? data.jobs : []);
+      if (query) track('job_search', { results: Array.isArray(data.jobs) ? data.jobs.length : 0, contract: contractType, hasLocation: !!location });
     } catch (e: any) {
       if (searchId === lastSearchId.current) {
         showToast('Recherche indisponible', e?.message || 'La recherche a échoué. Réessayez.', true);
@@ -491,7 +504,7 @@ export default function App() {
     setUserProfile(toSave);
     try {
       if (isCloudUser(user)) {
-        await setDoc(doc(db, 'users', user.uid), toSave);
+        await cloud.saveProfile(user.uid, toSave);
       } else {
         writeJson(profileKey(storageUid(user)), toSave);
       }
@@ -520,9 +533,9 @@ export default function App() {
     });
     if (isCloudUser(user)) {
       try {
-        await setDoc(doc(db, 'users', user.uid, 'applications', app.id), app);
+        await cloud.saveApplication(user.uid, app);
       } catch (err) {
-        console.error('Firestore app save error:', err);
+        console.error('App save error:', err);
         showToast('Sauvegarde en ligne échouée', 'Le dossier est visible ici mais n\'a pas été enregistré en ligne.', true);
       }
     }
@@ -530,6 +543,7 @@ export default function App() {
 
   const patchApplication = async (appId: string, patch: Partial<Application>) => {
     const user = currentUserRef.current;
+    const current = applicationsRef.current.find(a => a.id === appId);
     setApplications(prev => {
       const updated = prev.map(a => (a.id === appId ? { ...a, ...patch } : a));
       saveApplicationsLocally(user, updated);
@@ -537,9 +551,9 @@ export default function App() {
     });
     if (isCloudUser(user)) {
       try {
-        await updateDoc(doc(db, 'users', user.uid, 'applications', appId), patch as any);
+        if (current) await cloud.saveApplication(user.uid, { ...current, ...patch });
       } catch (err) {
-        console.error('Firestore app update error:', err);
+        console.error('App update error:', err);
         showToast('Mise à jour en ligne échouée', 'Réessayez dans un instant.', true);
       }
     }
@@ -547,6 +561,7 @@ export default function App() {
 
   const handleUpdateAppStatus = async (appId: string, newStatus: ApplicationStatus) => {
     const app = applications.find(a => a.id === appId);
+    track('application_status', { status: newStatus });
     const patch: Partial<Application> = {
       status: newStatus,
       logEvents: [...(app?.logEvents || []), { timestamp: new Date().toLocaleString('fr-FR'), message: `Statut : ${STATUS_LABELS[newStatus]}` }]
@@ -628,6 +643,7 @@ export default function App() {
   /** Doit être appelé directement dans un gestionnaire de clic (ouverture du portail non bloquée). */
   const handleInstantAutoApply = async (job: JobOffer) => {
     if (!job || isAgentRunning) return;
+    track('express_apply', { spontaneous: !!job.isSpontaneous });
 
     // Contrôles synchrones AVANT toute attente
     const existing = findExistingApplication(job);
@@ -731,9 +747,9 @@ export default function App() {
     });
     if (isCloudUser(user)) {
       try {
-        await deleteDoc(doc(db, 'users', user.uid, 'applications', appId));
+        await cloud.deleteApplication(user.uid, appId);
       } catch (err) {
-        console.error('Firestore app delete error:', err);
+        console.error('App delete error:', err);
         showToast('Suppression en ligne échouée', 'Réessayez dans un instant.', true);
       }
     }
@@ -753,6 +769,7 @@ export default function App() {
     }
     const app = buildApplication(job, '', '', 'Offre sauvegardée.');
     await persistApplication({ ...app, status: 'detected' });
+    track('job_saved', { spontaneous: !!job.isSpontaneous });
     showToast('Offre sauvegardée', 'Retrouvez-la dans l’onglet Candidatures.');
   };
 
@@ -797,9 +814,11 @@ export default function App() {
       return merged;
     });
     if (isCloudUser(user)) {
-      const results = await Promise.allSettled(owned.map(a => setDoc(doc(db, 'users', user.uid, 'applications', a.id), a)));
-      const failed = results.filter(r => r.status === 'rejected').length;
-      if (failed) showToast('Import partiel', `${failed} dossier(s) n’ont pas pu être enregistrés en ligne.`, true);
+      try {
+        await cloud.saveApplications(user.uid, owned);
+      } catch {
+        showToast('Import partiel', 'Les dossiers importés n’ont pas pu être enregistrés en ligne. Réessayez.', true);
+      }
     }
     showToast('Sauvegarde importée', `${owned.length} candidature(s) restaurée(s).`);
   };
@@ -866,6 +885,7 @@ export default function App() {
         followUpDueCount={followUpDueCount}
         applicationsCount={applications.length}
         alertsNewCount={(userProfile.savedSearches || []).reduce((n, s) => n + (s.newCount || 0), 0)}
+        plan={accountUsage?.plan ?? null}
       />
 
       {/* Main Content Area */}
@@ -1040,10 +1060,32 @@ export default function App() {
               setIsMandatoryOnboarding(false);
               setCvUploadModalOpen(true);
             }}
+            showToast={showToast}
+            onAccountDeleted={async () => {
+              await cloud.signOut().catch(() => {});
+              setCurrentUser(null);
+              setUserProfile(EMPTY_PROFILE);
+              setApplications([]);
+              setCurrentTab('radar');
+            }}
+          />
+        )}
+
+        {currentTab === 'pricing' && (
+          <PricingView
+            usage={accountUsage}
+            signedIn={isCloudUser(currentUser)}
+            onOpenAuthModal={(mode) => {
+              setAuthModalMode(mode);
+              setAuthModalOpen(true);
+            }}
+            showToast={showToast}
+            paymentStatus={paymentStatus}
           />
         )}
 
       </main>
+
 
       {/* AUTHENTICATION & ACCOUNT CREATION MODAL */}
       <AuthModal
@@ -1063,19 +1105,9 @@ export default function App() {
             return;
           }
           if (isNewAccount) {
-            // Le profil Firestore est créé par onAuthStateChanged ; on lui transmet le nom / titre saisis
-            pendingSignupRef.current = { uid: user.uid, fullName: extra?.fullName, title: extra?.title };
-            const patch: Partial<UserProfile> = { userId: user.uid };
-            if (extra?.fullName) patch.fullName = extra.fullName;
-            if (extra?.title) patch.title = extra.title;
-            // Écriture « merge » limitée à ces champs : ne peut rien écraser d'autre
-            setDoc(doc(db, 'users', user.uid), patch, { merge: true }).catch(() => {});
-            setUserProfile(prev => (prev.userId === user.uid || !prev.userId)
-              ? { ...prev, userId: user.uid, fullName: prev.fullName || extra?.fullName || '', title: prev.title || extra?.title || '' }
-              : prev);
+            // Le profil en ligne est créé au premier chargement du compte (nom et titre : métadonnées du compte)
+            track('signup');
             showToast('Compte créé', 'Déposez maintenant votre CV pour que vos informations soient extraites.');
-            setIsMandatoryOnboarding(true);
-            setCvUploadModalOpen(true);
           } else {
             showToast('Connexion réussie', 'Vos données sont synchronisées.');
           }
@@ -1116,6 +1148,7 @@ export default function App() {
           }}
           onClose={() => { setSelectedJobForLatex(null); setSelectedAppForLatex(null); }}
           onApplyWithLatex={async (job, latexCode, coverLetter, template, tailored, analysis) => {
+            track('dossier_validated', { template, tailored: !!tailored });
             const existing = findExistingApplication(job);
             if (existing) {
               // Mise à jour du dossier existant (pas de doublon) ; l'ancienne version est archivée
@@ -1191,6 +1224,20 @@ export default function App() {
         </div>
       )}
 
+
+      {/* Toujours au premier plan (y compris au-dessus du Studio) */}
+      <UpgradeModal
+        detail={quotaDetail}
+        onClose={() => setQuotaDetail(null)}
+        onSeePlans={() => {
+          setQuotaDetail(null);
+          // Les fenêtres ouvertes (Studio, entretien) masqueraient la page Tarifs
+          setSelectedJobForLatex(null);
+          setSelectedAppForLatex(null);
+          setSelectedAppForInterview(null);
+          setCurrentTab('pricing');
+        }}
+      />
     </div>
   );
 }

@@ -15,6 +15,7 @@ import { startMockSources } from './mock-sources.mjs';
 import { e2eServerEnv, MOCK_PORT, APP_PORT } from './env.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const outDir = process.env.E2E_OUT_DIR || (await import('node:os')).tmpdir();
 if (!fs.existsSync(path.join(root, 'dist', 'server.cjs'))) {
   console.error('dist/server.cjs introuvable : lancez d’abord « npm run build ».');
   process.exit(1);
@@ -186,6 +187,15 @@ try {
   await page.getByRole('button', { name: 'Plus concis' }).click();
   await page.waitForTimeout(1500);
   check('retouche ciblée d’une puce', (await page.locator('textarea[aria-label^="Point 1"]').first().inputValue()).startsWith('Conçu des interfaces'));
+  // Freemium : 2e retouche au-delà du quota gratuit → fenêtre « Passer à Premium »
+  await page.getByRole('button', { name: 'Retoucher le point 1' }).first().click();
+  await page.getByRole('button', { name: 'Plus concis' }).click();
+  await page.waitForTimeout(1200);
+  const upgrade = page.getByRole('dialog', { name: 'Limite du mois atteinte' });
+  check('quota gratuit atteint : fenêtre « Passer à Premium »', await upgrade.isVisible().catch(() => false));
+  await upgrade.getByRole('button', { name: 'Plus tard' }).click();
+  await page.waitForTimeout(300);
+  check('fenêtre Premium refermée', !(await upgrade.isVisible()));
   await page.getByRole('tab', { name: 'Code LaTeX' }).click();
   await page.waitForTimeout(300);
   const tex = await page.getByLabel('Code source LaTeX du CV').inputValue();
@@ -206,17 +216,20 @@ try {
     check('lettre en PDF', fs.readFileSync(await letterPdf.path()).subarray(0, 4).toString() === '%PDF');
   }
   await page.getByRole('tab', { name: 'Code LaTeX' }).click();
-  if (/pdflatex|tectonic/.test(serverLog) || await page.getByRole('tab', { name: 'Aperçu' }).count()) {
-    await page.getByRole('tab', { name: 'Aperçu' }).click();
-    await page.waitForSelector('iframe[title="Aperçu du CV (PDF)"]', { timeout: 30000 }).catch(() => null);
-    check('aperçu PDF intégré', (await page.locator('iframe[title="Aperçu du CV (PDF)"]').count()) === 1);
-  }
+  // Le modèle Photo passe en LaTeX si le serveur compile : retour au moteur Web pour l'aperçu Web
+  await page.getByRole('button', { name: 'Web', exact: true }).click();
+  await page.getByRole('tab', { name: 'Aperçu' }).click();
+  await page.waitForSelector('iframe[title="Aperçu du CV"]', { timeout: 30000 }).catch(() => null);
+  const webFrame = page.frameLocator('iframe[title="Aperçu du CV"]');
+  const webText = await webFrame.locator('body').textContent({ timeout: 10000 }).catch(() => '');
+  check('aperçu Web intégré (contenu adapté)', /Titre modifié e2e/.test(webText || ''), (webText || '').slice(0, 80));
+  await page.screenshot({ path: path.join(outDir, 'studio-apercu-web.png') }).catch(() => null);
   const [dl] = await Promise.all([
     page.waitForEvent('download', { timeout: 30000 }),
     page.getByRole('button', { name: /PDF/ }).first().click()
   ]).catch(() => [null]);
   const pdfOk = dl ? fs.readFileSync(await dl.path()).subarray(0, 4).toString() === '%PDF' : false;
-  check('PDF compilé (si LaTeX installé sur la machine)', pdfOk || !/pdflatex|tectonic/.test(serverLog), dl ? '' : 'aucun téléchargement');
+  check('PDF Web téléchargé (Chromium)', pdfOk, dl ? '' : 'aucun téléchargement');
   await page.getByRole('button', { name: 'Valider et postuler' }).click();
   await page.waitForTimeout(800);
   body = await page.textContent('body');
@@ -259,6 +272,10 @@ try {
   const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   check('mode sombre', await page.evaluate(() => document.documentElement.classList.contains('dark')) && bg !== 'rgb(246, 247, 249)', bg);
 
+  await page.goto(`${BASE}/?onglet=tarifs`);
+  await page.waitForTimeout(1200);
+  const pricing = await page.textContent('main');
+  check('page Tarifs : forfaits et consommation du mois', /Premium/.test(pricing) && /Retouches et évaluations IA\s*1\s*\/\s*1/.test(pricing), pricing.slice(0, 160));
   check('aucune erreur JavaScript', errors.length === 0, errors.slice(0, 3).join(' | '));
   await ctx.close();
 
@@ -274,6 +291,7 @@ try {
   check('pas de défilement horizontal', overflow <= 1, `${overflow}px`);
   await m.close();
 } catch (e) {
+  for (const p of browser.contexts().flatMap((c) => c.pages()).slice(0, 1)) await p.screenshot({ path: path.join(outDir, 'e2e-echec.png') }).catch(() => {});
   check('exécution sans exception', false, e?.message);
 } finally {
   await browser.close();

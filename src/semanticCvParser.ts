@@ -290,6 +290,48 @@ export function extractTechnologies(text: string): string[] {
   return Array.from(new Set(found));
 }
 
+/**
+ * Compétences telles qu'écrites dans le texte (« Docker », « PostgreSQL ») et non le nom de
+ * regroupement du catalogue (« Docker & Kubernetes ») : le profil ne doit contenir que ce que
+ * la personne a réellement mentionné.
+ */
+export function extractSkillMentions(text: string): string[] {
+  const found: Array<{ label: string; at: number }> = [];
+  const seen = new Set<string>();
+  const spans: Array<[number, number]> = []; // « Node » ne doit pas être repris dans « Node.js »
+  for (const item of UNIVERSAL_SKILLS_CATALOG) {
+    const aliases = [...item.aliases].sort((a, b) => b.replace(/\\/g, '').length - a.replace(/\\/g, '').length);
+    for (const rawAlias of aliases) {
+      const strict = rawAlias.startsWith('=');
+      const alias = strict ? rawAlias.slice(1) : rawAlias;
+      let regex: RegExp;
+      try {
+        regex = new RegExp(`(^|[^a-zA-Z0-9_#+À-ÿ])(${alias})(?=[^a-zA-Z0-9_#+À-ÿ'’]|$)`, strict ? 'g' : 'gi');
+      } catch {
+        continue;
+      }
+      for (const m of text.matchAll(regex)) {
+        const raw = m[2].trim();
+        if (!raw) continue;
+        const start = (m.index ?? 0) + m[1].length;
+        const end = start + m[2].length;
+        if (spans.some(([a, b]) => start < b && end > a)) continue;
+        spans.push([start, end]);
+        // Casse de référence prise dans le nom du catalogue quand il contient le terme (postgresql → PostgreSQL)
+        const idx = item.name.toLowerCase().indexOf(raw.toLowerCase());
+        const inName = idx >= 0 && !/[a-zA-Z0-9]/.test(item.name[idx + raw.length] || '') && !/[a-zA-Z0-9]/.test(item.name[idx - 1] || '');
+        const label = inName ? item.name.slice(idx, idx + raw.length) : raw;
+        const key = label.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          found.push({ label, at: start });
+        }
+      }
+    }
+  }
+  return found.sort((a, b) => a.at - b.at).map((f) => f.label);
+}
+
 // ---------------------------------------------------------------------------
 // 3. Semantic CV Parser (Deterministic Heuristic Engine)
 // ---------------------------------------------------------------------------
@@ -514,7 +556,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
   // Pas d'accroche inventée : si le CV n'en contient pas, le champ reste vide.
 
   // 3.7 Skills Extraction
-  const allDetectedSkills = extractTechnologies(text);
+  const allDetectedSkills = extractSkillMentions(text);
   const skillsSec = sections.find(s => s.type === 'skills');
   const sectionSkills: string[] = [];
   if (skillsSec) {
@@ -642,7 +684,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
         endDate: '',
         current: false,
         bullets: rawBullets.slice(0, 5),
-        technologies: extractTechnologies(rawBullets.join(' ')).slice(0, 5)
+        technologies: extractSkillMentions(rawBullets.join(' ')).slice(0, 5)
       });
     }
   }
@@ -708,7 +750,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
             id: `proj-${projects.length + 1}`,
             name: projName,
             description: projDesc || '',
-            technologies: extractTechnologies(`${projName} ${projDesc}`).slice(0, 4)
+            technologies: extractSkillMentions(`${projName} ${projDesc}`).slice(0, 4)
           });
         }
         projName = l.replace(/^[:\s-]+/, '').trim();
@@ -722,7 +764,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
         id: `proj-${projects.length + 1}`,
         name: projName,
         description: projDesc || '',
-        technologies: extractTechnologies(`${projName} ${projDesc}`).slice(0, 4)
+        technologies: extractSkillMentions(`${projName} ${projDesc}`).slice(0, 4)
       });
     }
   }
@@ -783,7 +825,7 @@ function finalizeExperience(rawExp: Partial<Experience> & { rawLines: string[] }
     }
   }
 
-  const techDetected = extractTechnologies(fullContent);
+  const techDetected = extractSkillMentions(fullContent);
 
   return {
     id: `exp-${Date.now()}-${index + 1}`,

@@ -143,6 +143,7 @@ function buildData(candidate: any, job: any, tailored = false): CvData {
     })),
     projects: (hasItems(candidate?.projects) ? candidate.projects : [])
       .filter((p: any) => clean(p?.name))
+      .slice(0, 4)
       .map((p: any) => ({
         name: escapeLatex(clean(p.name)),
         description: escapeLatex(clean(p.description)),
@@ -258,6 +259,7 @@ function renderModernCv(d: CvData): string {
   if (exp) sections.push(`\\section{Expériences professionnelles}\n${exp}`);
   if (d.skills.length) sections.push(`\\section{Compétences}\n\\cvitem{}{${d.skills.join(", ")}}`);
   if (edu) sections.push(`\\section{Formations}\n${edu}`);
+  if (d.projects.length) sections.push(`\\section{Projets}\n${d.projects.map((p) => `\\cvitem{${p.name}}{${p.description}${projectTech(p) ? ` \\textit{(${projectTech(p)})}` : ""}}`).join("\n")}`);
   if (d.languages.length) sections.push(`\\section{Langues}\n${d.languages.map((l) => `\\cvitem{}{${l}}`).join("\n")}`);
 
   return `\\documentclass[11pt,a4paper,sans]{moderncv}

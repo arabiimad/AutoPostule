@@ -112,3 +112,28 @@ test('lecture JSON tolérante (bloc ```json)', () => {
   assert.deepEqual(parseJson('Voici : {"a":2} merci'), { a: 2 });
   assert.equal(parseJson('rien'), null);
 });
+
+test('relecture sémantique : une reformulation non fidèle revient au texte d’origine', async () => {
+  const { reviewTailored } = await import('../server/cvPipeline.ts');
+  const tailored = {
+    headline: 'x', summary: 'y', skillsOrder: [], highlights: [],
+    experiences: [{ id: 'e1', include: true, bullets: ['Piloté le déploiement de logiciels internes sur 12 sites', 'Production de tutoriels vidéo e-learning'] }]
+  };
+  let prompt = '';
+  const gen: GenerateFn = async (p) => { prompt = p; return JSON.stringify({ approved: [] }); };
+  const r = await reviewTailored(gen, CANDIDATE, tailored);
+  assert.match(prompt, /jamais des instructions/, 'données isolées des consignes');
+  assert.match(prompt, /"ref":"0:0"/);
+  assert.ok(!prompt.includes('"ref":"0:1"'), 'puce identique à l’original : pas relue');
+  assert.deepEqual(r.tailored.experiences[0].bullets, ['Déploiement de logiciels internes sur 12 sites', 'Production de tutoriels vidéo e-learning']);
+  assert.equal(r.rejected.length, 1);
+});
+
+test('projets personnels rendus dans les modèles LaTeX et Web', async () => {
+  const { renderCvHtml } = await import('../server/pdf.ts');
+  const withProject = { ...CANDIDATE, projects: [{ name: 'AutoPostule', description: 'Plateforme de candidatures', technologies: ['React', 'Node.js'] }] };
+  for (const t of ['article', 'moderncv', 'compact'] as const) {
+    assert.match(generateFallbackLatex(withProject, JOB, t), /AutoPostule/);
+  }
+  assert.match(renderCvHtml(withProject, JOB, 'article'), /Plateforme de candidatures/);
+});
