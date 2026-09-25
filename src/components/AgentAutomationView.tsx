@@ -5,21 +5,42 @@ import {
   Settings,
   Terminal,
   ShieldCheck,
-  ArrowRight
+  ArrowRight,
+  Layers,
+  Square,
+  Send,
+  ExternalLink,
+  FileText,
+  Search
 } from 'lucide-react';
-import { UserProfile, AgentLog, ContractType } from '../types';
-import { Button, PageHeader, cx } from './ui';
+import { UserProfile, AgentLog, ContractType, Application } from '../types';
+import { Button, CompanyAvatar, PageHeader, cx } from './ui';
 
 interface AgentAutomationViewProps {
   userProfile: UserProfile;
   /** Enregistre (et persiste) des réglages du profil. */
   onSaveSettings: (updated: Partial<UserProfile>) => void;
   onTriggerAgentCycle: () => Promise<void>;
+  /** Prépare plusieurs dossiers d'affilée (sans ouvrir de portail). */
+  onTriggerBatch: (count: number) => Promise<void>;
+  onStop: () => void;
+  progress: { done: number; total: number } | null;
   isAgentRunning: boolean;
   agentLogs: AgentLog[];
   onGoToInterviews: () => void;
+  onGoToOffers: () => void;
   preparedCount: number;
+  /** Nombre d'offres chargées et libellé de la recherche analysée. */
+  jobsCount: number;
+  searchLabel: string;
+  /** Dossiers prêts (CV + lettre) pas encore envoyés. */
+  queue: Application[];
+  onOpenQueued: (app: Application) => void;
+  onMarkApplied: (app: Application) => void;
+  onOpenDossier: (app: Application) => void;
 }
+
+const BATCH_SIZES = [3, 5, 10];
 
 const CONTRACTS: { id: ContractType; label: string }[] = [
   { id: 'alternance', label: 'Alternance' },
@@ -32,17 +53,30 @@ const CONTRACTS: { id: ContractType; label: string }[] = [
 /**
  * Assistant de candidature (semi-automatique).
  * À chaque cycle : choisit la meilleure offre non traitée qui respecte le seuil et les contrats préférés,
- * génère CV + lettre, ouvre le portail de l'entreprise. La soumission reste faite par l'utilisateur.
+ * génère CV + lettre, ouvre le portail de l'entreprise. En série, prépare plusieurs dossiers qui rejoignent
+ * la file « prêts à envoyer ». La soumission reste faite par l'utilisateur.
  */
 export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
   userProfile,
   onSaveSettings,
   onTriggerAgentCycle,
+  onTriggerBatch,
+  onStop,
+  progress,
   isAgentRunning,
   agentLogs,
   onGoToInterviews,
-  preparedCount
+  onGoToOffers,
+  preparedCount,
+  jobsCount,
+  searchLabel,
+  queue,
+  onOpenQueued,
+  onMarkApplied,
+  onOpenDossier
 }) => {
+  const [batchSize, setBatchSize] = useState<number>(5);
+  const sortedQueue = [...queue].sort((a, b) => (b.matchScore ?? -1) - (a.matchScore ?? -1));
   const [minScore, setMinScore] = useState<number>(userProfile.minMatchScore ?? 60);
 
   useEffect(() => {
@@ -72,7 +106,7 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
 
       <PageHeader
         title="Assistant de candidatures"
-        subtitle={<>À chaque clic, l’assistant choisit la meilleure offre encore non traitée selon vos critères, génère un CV LaTeX et une lettre à partir de votre profil, puis ouvre le site de l’entreprise. <strong className="text-slate-700">C’est vous qui envoyez la candidature</strong> : rien n’est envoyé à votre place.</>}
+        subtitle={<>L’assistant choisit les meilleures offres encore non traitées selon vos critères, génère pour chacune un CV et une lettre à partir de votre profil, puis vous ouvre le site de l’entreprise avec la lettre copiée et le CV en PDF. <strong className="text-slate-700">C’est vous qui envoyez la candidature</strong> : rien n’est envoyé à votre place.</>}
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -139,6 +173,21 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
               </p>
             )}
 
+            <div className="space-y-2 border-t border-slate-200 pt-4">
+              <div className="flex items-start justify-between gap-2 text-xs text-slate-500">
+                <span className="flex items-start gap-1.5">
+                  <Search className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    Offres analysées : <strong className="text-slate-700">{jobsCount}</strong>
+                    {searchLabel ? <> ({searchLabel})</> : <> (dernière recherche)</>}. Les pages suivantes des sources sont chargées si besoin.
+                  </span>
+                </span>
+                <button type="button" onClick={onGoToOffers} className="shrink-0 font-semibold text-brand-700 hover:text-brand-900">
+                  Changer
+                </button>
+              </div>
+            </div>
+
             <Button
               type="button"
               variant="primary"
@@ -148,7 +197,7 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
               aria-describedby={!hasProfile ? profileHintId : undefined}
               className="w-full"
             >
-              {isAgentRunning ? (
+              {isAgentRunning && !progress ? (
                 <>
                   <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true" />
                   Préparation du dossier…
@@ -160,7 +209,88 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
                 </>
               )}
             </Button>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor={`${uid}-batch`} className="text-sm font-medium text-slate-700">Série de</label>
+                <select
+                  id={`${uid}-batch`}
+                  value={batchSize}
+                  onChange={(e) => setBatchSize(Number(e.target.value))}
+                  disabled={isAgentRunning}
+                  className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm"
+                >
+                  {BATCH_SIZES.map(n => <option key={n} value={n}>{n} dossiers</option>)}
+                </select>
+                {progress ? (
+                  <Button type="button" variant="secondary" size="sm" onClick={onStop} className="ml-auto">
+                    <Square className="h-3.5 w-3.5 fill-current" aria-hidden="true" /> Arrêter
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onTriggerBatch(batchSize)}
+                    disabled={isAgentRunning || !hasProfile}
+                    className="ml-auto"
+                  >
+                    <Layers className="h-3.5 w-3.5" aria-hidden="true" /> Préparer en série
+                  </Button>
+                )}
+              </div>
+              {progress && (
+                <div role="status" aria-live="polite" className="space-y-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full bg-brand-600 transition-all" style={{ width: `${progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%` }} />
+                  </div>
+                  <p className="text-xs text-slate-600">Dossier {Math.min(progress.done + 1, progress.total)} sur {progress.total}…</p>
+                </div>
+              )}
+              <p className="text-xs text-slate-500">
+                Prépare plusieurs CV et lettres d’affilée, sans ouvrir de fenêtre. Vous les envoyez ensuite un par un depuis la file ci-dessous.
+              </p>
+            </div>
           </div>
+
+          <section aria-labelledby={`${uid}-queue`} className="rounded-2xl border border-slate-200 bg-white p-5 space-y-3">
+            <h2 id={`${uid}-queue`} className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
+              <Send className="h-4 w-4 text-brand-600" aria-hidden="true" />
+              Dossiers prêts à envoyer
+              <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{queue.length}</span>
+            </h2>
+            {sortedQueue.length === 0 ? (
+              <p className="text-sm text-slate-500">Aucun dossier en attente. Les dossiers préparés apparaîtront ici.</p>
+            ) : (
+              <ul className="thin-scroll max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                {sortedQueue.map(app => (
+                  <li key={app.id} className="rounded-xl border border-slate-200 p-3">
+                    <div className="flex items-start gap-3">
+                      <CompanyAvatar name={app.company} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-900" title={app.jobTitle}>{app.jobTitle}</p>
+                        <p className="truncate text-xs text-slate-500">
+                          {app.company}{app.location ? ` · ${app.location}` : ''}
+                          {typeof app.matchScore === 'number' && <span className="font-semibold text-emerald-700"> · {app.matchScore} %</span>}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button type="button" size="sm" variant="primary" onClick={() => onOpenQueued(app)} disabled={!app.jobUrl} title={app.jobUrl ? 'Ouvre le site, copie la lettre et télécharge le CV' : 'Aucun lien de candidature pour cette offre'}>
+                        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" /> Postuler
+                      </Button>
+                      <Button type="button" size="sm" variant="secondary" onClick={() => onMarkApplied(app)}>
+                        <Send className="h-3.5 w-3.5" aria-hidden="true" /> J’ai postulé
+                      </Button>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => onOpenDossier(app)}>
+                        <FileText className="h-3.5 w-3.5" aria-hidden="true" /> Voir le dossier
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-2 text-sm text-slate-700">
             <h2 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
@@ -226,7 +356,7 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
             </div>
 
             <div className="mt-3 flex flex-col gap-1 border-t border-slate-200 pt-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-              <span>Offres analysées : celles de votre dernière recherche</span>
+              <span>Offres chargées : {jobsCount}</span>
               <span>Dossiers suivis : <strong className="text-slate-900">{preparedCount}</strong></span>
             </div>
           </section>

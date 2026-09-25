@@ -1,6 +1,6 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderCvHtml, generatePdfFromHtml, getSectorColor, escapeHtml } from '../server/pdf.ts';
+import { renderCvHtml, generatePdfFromHtml, getSectorColor, escapeHtml, closeBrowser } from '../server/pdf.ts';
 
 const candidate = {
   fullName: 'Sarah Benali <script>',
@@ -56,6 +56,8 @@ for (const template of ['article', 'moderncv', 'compact'] as const) {
     assert.doesNotMatch(html, /Pack Office/);
   });
 }
+
+after(closeBrowser);
 
 test('génération PDF Chromium Playwright', async () => {
   const html = renderCvHtml(candidate, job, 'article');

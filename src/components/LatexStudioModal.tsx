@@ -85,6 +85,8 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
 }) => {
   const [template, setTemplate] = useState<CvTemplate>(normalizeTemplate(initialTemplate ?? userProfile.preferredTemplate));
   const [compilerAvailable, setCompilerAvailable] = useState(false);
+  // 'chromium' : pas de LaTeX sur le serveur, le PDF est rendu à partir du contenu (pas du code LaTeX)
+  const [compilerKind, setCompilerKind] = useState<string | null>(null);
   const [isCompiling, setIsCompiling] = useState(false);
   // Aucune donnée de repli : le studio n'utilise que le profil de l'utilisateur connecté.
   const computedMatch = calculateCandidateMatch(userProfile.skills, job?.skillsRequired || []);
@@ -123,14 +125,15 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
     let alive = true;
     apiFetch('/api/latex/compiler')
       .then(r => r.json())
-      .then(d => { if (alive) setCompilerAvailable(!!d?.available); })
+      .then(d => { if (alive) { setCompilerAvailable(!!d?.available); setCompilerKind(d?.compiler || null); } })
       .catch(() => {});
     return () => { alive = false; };
   }, []);
 
   /** Compile le code LaTeX sur le serveur et renvoie le PDF. */
   const fetchPdf = async (code: string): Promise<Blob> => {
-    const res = await apiFetch('/api/latex/compile', { latexCode: code });
+    // Le contenu accompagne le code : sans LaTeX sur le serveur, le PDF est rendu à partir de lui
+    const res = await apiFetch('/api/latex/compile', { latexCode: code, candidate: userProfile, job, template, tailored });
     if (!res.ok) {
       const data = await res.json().catch(() => null);
       throw new Error(data?.error || `Compilation impossible (${res.status}).`);
@@ -467,7 +470,11 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
         {currentTab === 'preview' && (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs text-slate-500">Rendu réel du CV (compilé par pdfLaTeX / Tectonic sur le serveur).</p>
+              <p className="text-xs text-slate-500">
+                {compilerKind === 'chromium'
+                  ? 'Rendu PDF du contenu de votre CV (modèle ' + templateLabel(template) + '). Les retouches faites directement dans le code LaTeX n’y figurent pas : utilisez Overleaf pour celles-ci.'
+                  : 'Rendu réel du CV (compilé par pdfLaTeX / Tectonic sur le serveur).'}
+              </p>
               <Button size="sm" variant="secondary" onClick={refreshPreview} disabled={!latexCode || isCompiling || isRendering}>
                 <Eye className="h-3.5 w-3.5" aria-hidden="true" /> {isCompiling ? 'Compilation…' : 'Mettre à jour l’aperçu'}
               </Button>

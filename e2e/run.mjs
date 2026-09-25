@@ -216,6 +216,27 @@ try {
   const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   check('mode sombre', await page.evaluate(() => document.documentElement.classList.contains('dark')) && bg !== 'rgb(246, 247, 249)', bg);
 
+  // Assistant : série de dossiers, file d'envoi, PDF sans LaTeX (rendu Chromium)
+  await page.locator('header nav button', { hasText: 'Assistant' }).click();
+  await page.waitForTimeout(400);
+  await page.getByRole('button', { name: /Préparer en série/ }).click();
+  await page.getByRole('button', { name: /Préparer en série/ }).waitFor({ timeout: 30000 });
+  const agentLog = await page.locator('[role=log]').innerText();
+  const queue = page.locator('section', { hasText: 'Dossiers prêts à envoyer' });
+  const queued = await queue.locator('li').count();
+  check('assistant : série de dossiers préparés', queued >= 2 && /Série lancée/.test(agentLog), `${queued} dossier(s)`);
+  check('assistant : offres écartées expliquées', /déjà dans vos candidatures/.test(agentLog), agentLog.slice(0, 200));
+  const [portalPage, cvPdf] = await Promise.all([
+    ctx.waitForEvent('page', { timeout: 30000 }).catch(() => null),
+    page.waitForEvent('download', { timeout: 30000 }).catch(() => null),
+    queue.locator('li').first().getByRole('button', { name: 'Postuler' }).click()
+  ]);
+  check('file d’envoi : portail ouvert', !!portalPage);
+  check('file d’envoi : CV téléchargé en PDF', !!cvPdf && fs.readFileSync(await cvPdf.path()).subarray(0, 4).toString() === '%PDF');
+  await queue.locator('li').first().getByRole('button', { name: /J’ai postulé/ }).click();
+  await page.waitForTimeout(400);
+  check('file d’envoi : dossier envoyé retiré de la file', (await queue.locator('li').count()) === queued - 1);
+
   check('aucune erreur JavaScript', errors.length === 0, errors.slice(0, 3).join(' | '));
   await ctx.close();
 
@@ -240,3 +261,4 @@ try {
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed}/${results.length} vérifications réussies.`);
 process.exit(failed ? 1 : 0);
+

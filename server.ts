@@ -9,6 +9,7 @@ import { calculateCandidateMatch } from "./src/utils/skillMatcher.ts";
 import { searchRealJobs, hasRealSources, getSourceStatus } from "./server/jobSources.ts";
 import { generateFallbackLatex, normalizeTemplate, templateInstructions, compileLatex, detectLatexCompiler, TEMPLATES } from "./server/latex.ts";
 import { authMiddleware, getAuthMode } from "./server/auth.ts";
+import { renderCvHtml, generatePdfFromHtml, isChromiumRendererAvailable, closeBrowser } from "./server/pdf.ts";
 import { extractTextFromDocx } from "./server/docx.ts";
 import { kv, countApiCall, getQuotaUsage } from "./server/store.ts";
 import { createHash } from "node:crypto";
@@ -339,10 +340,15 @@ async function startServer() {
   const PROTECTED = ["/api/cv", "/api/tailor", "/api/interview", "/api/latex/compile"];
   app.use(PROTECTED, authMiddleware());
   // Mise en forme sans IA (/api/tailor/render) : appelée à chaque retouche, limite plus large
+  // PDF (/api/latex/compile) : sans IA, quota séparé (sinon une série de dossiers bloque le téléchargement du CV)
   const iaLimiter = createRateLimiter("ia", 30, 60_000);
   const renderLimiter = createRateLimiter("render", 150, 60_000);
-  app.use(PROTECTED, (req: any, res: any, next: any) =>
-    (String(req.originalUrl).startsWith("/api/tailor/render") ? renderLimiter : iaLimiter)(req, res, next));
+  const pdfLimiter = createRateLimiter("pdf", 30, 60_000);
+  app.use(PROTECTED, (req: any, res: any, next: any) => {
+    const url = String(req.originalUrl);
+    const limiter = url.startsWith("/api/tailor/render") ? renderLimiter : url.startsWith("/api/latex/compile") ? pdfLimiter : iaLimiter;
+    return limiter(req, res, next);
+  });
   // Recherche d'offres : quotas des API partenaires (60/min pour La bonne alternance), résultats en cache
   app.use("/api/jobs", createRateLimiter("jobs", 40, 60_000));
   app.use("/api/client-errors", createRateLimiter("errors", 20, 60_000));
@@ -833,17 +839,35 @@ Renvoie uniquement un JSON : { "subject": "objet", "body": "texte de l'email sig
     }
   });
 
-  // 4 ter. Compilation PDF locale (si pdflatex ou tectonic est installé sur la machine du serveur)
+  // 4 ter. PDF du CV : compilation LaTeX locale (pdflatex ou tectonic) ; sinon rendu du même contenu par Chromium
   app.get("/api/latex/templates", (req, res) => res.json({ templates: TEMPLATES }));
   app.get("/api/latex/compiler", async (req, res) => {
     const c = await detectLatexCompiler();
-    res.json({ available: !!c, compiler: c?.kind || null });
+    if (c) return res.json({ available: true, compiler: c.kind });
+    const chromium = await isChromiumRendererAvailable();
+    res.json({ available: chromium, compiler: chromium ? "chromium" : null });
   });
   app.post("/api/latex/compile", async (req, res) => {
     const tex = String(req.body?.latexCode || "");
     const result = await compileLatex(tex);
     if (result.error === "NO_COMPILER") {
-      return res.status(501).json({ success: false, error: "Aucun compilateur LaTeX sur le serveur (installez TeX Live, MiKTeX ou tectonic), ou utilisez Overleaf." });
+      const { candidate, job } = req.body || {};
+      if (!hasItems(candidate?.experiences) || !(await isChromiumRendererAvailable())) {
+        return res.status(501).json({ success: false, error: "Aucun compilateur PDF sur le serveur (installez TeX Live, MiKTeX ou tectonic), ou utilisez Overleaf." });
+      }
+      try {
+        const template = normalizeTemplate(req.body?.template ?? candidate?.preferredTemplate);
+        const tailored = sanitizeTailored(req.body?.tailored);
+        const html = renderCvHtml(applyTailored(candidate, tailored), job, template, undefined, undefined, { tailored: !!tailored });
+        const pdf = await generatePdfFromHtml(html);
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", 'inline; filename="cv.pdf"');
+        res.setHeader("X-Pdf-Renderer", "chromium");
+        return res.send(pdf);
+      } catch (e: any) {
+        logEvent("error", "pdf_render_failed", { message: e?.message || String(e) });
+        return res.status(500).json({ success: false, error: "Le PDF n'a pas pu être généré. Réessayez ou utilisez Overleaf." });
+      }
     }
     if (!result.pdf) {
       return res.status(422).json({ success: false, error: result.error || "Compilation impossible.", log: result.log });
@@ -977,6 +1001,13 @@ Analyse avec la méthode STAR. Renvoie uniquement un JSON valide :
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  // Arrêt propre : le navigateur du rendu PDF est fermé avec le serveur
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.once(signal, () => {
+      closeBrowser().finally(() => process.exit(0));
     });
   }
 

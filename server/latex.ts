@@ -6,7 +6,7 @@ import { spawn } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { calculateCandidateMatch } from "../src/utils/skillMatcher.ts";
+import { candidateHasSkill } from "../src/utils/skillMatcher.ts";
 import type { CvTemplate } from "../src/types.ts";
 
 // ---------------------------------------------------------------------------
@@ -66,8 +66,11 @@ interface CvData {
 }
 
 function buildData(candidate: any, job: any, tailored = false): CvData {
-  const match = calculateCandidateMatch(candidate?.skills || [], job?.skillsRequired || []);
-  const ownSkills: string[] = hasItems(candidate?.skills) ? candidate.skills : [];
+  const ownSkills: string[] = hasItems(candidate?.skills) ? candidate.skills.map(clean).filter(Boolean) : [];
+  const requirements: string[] = Array.isArray(job?.skillsRequired) ? job.skillsRequired : [];
+  // Une compétence du profil est « pertinente » si elle couvre une exigence de l'offre.
+  // Seuls les libellés du profil sont affichés : jamais ceux de l'offre (« Photoshop et Illustrator »).
+  const relevant = (skill: string) => requirements.some((req) => candidateHasSkill([skill], req));
   return {
     name: escapeLatex(clean(candidate?.fullName)),
     // Contenu adapté : titre choisi pour ce CV ; sinon intitulé de l'offre (sans le préfixe des candidatures spontanées)
@@ -98,7 +101,7 @@ function buildData(candidate: any, job: any, tailored = false): CvData {
       institution: escapeLatex(clean(e.institution))
     })),
     // Compétences demandées par l'offre ET possédées d'abord, puis le reste du profil
-    skills: (tailored ? ownSkills : Array.from(new Set([...match.matchedKeywords, ...ownSkills]))).map(escapeLatex),
+    skills: (tailored ? ownSkills : Array.from(new Set([...ownSkills.filter(relevant), ...ownSkills.filter((s) => !relevant(s))]))).map(escapeLatex),
     languages: (hasItems(candidate?.languages) ? candidate.languages : []).map(clean).filter(Boolean).map(escapeLatex)
   };
 }

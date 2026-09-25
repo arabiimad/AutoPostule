@@ -82,6 +82,43 @@ function withProfileDefaults(p: Partial<UserProfile>): UserProfile {
 
 const nowTime = () => new Date().toLocaleTimeString('fr-FR');
 
+/**
+ * Copie synchrone (pendant le clic, avant d'ouvrir un portail) : ne consomme pas l'autorisation d'ouvrir une fenêtre,
+ * contrairement à navigator.clipboard. Renvoie false si le navigateur refuse.
+ */
+const copyToClipboardSync = (text: string): boolean => {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  const active = document.activeElement as HTMLElement | null;
+  try {
+    area.select();
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+    active?.focus?.();
+  }
+};
+
+/** Copie un texte ; renvoie false si le navigateur refuse ou ne répond pas (2 s). */
+const copyToClipboard = (text: string): Promise<boolean> => {
+  try {
+    const write = navigator.clipboard?.writeText(text);
+    if (!write) return Promise.resolve(false);
+    return Promise.race([
+      write.then(() => true, () => false),
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 2000))
+    ]);
+  } catch {
+    return Promise.resolve(false);
+  }
+};
+
 export interface JobsMeta {
   mode: 'live' | 'demo' | null;
   warnings: string[];
@@ -147,6 +184,14 @@ export default function App() {
 
   const [isLoadingJobs, setIsLoadingJobs] = useState(false);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
+  // Référence synchrone (un double clic ne lance pas deux préparations) + demande d'arrêt d'une série
+  const agentBusyRef = useRef(false);
+  const agentStopRef = useRef(false);
+  const [agentProgress, setAgentProgress] = useState<{ done: number; total: number } | null>(null);
+  const setAgentBusy = (busy: boolean) => {
+    agentBusyRef.current = busy;
+    setIsAgentRunning(busy);
+  };
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ title: string; desc: string; error?: boolean } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -162,6 +207,13 @@ export default function App() {
   currentUserRef.current = currentUser;
   const profileRef = useRef<UserProfile>(userProfile);
   profileRef.current = userProfile;
+  const jobsMetaRef = useRef<JobsMeta>(jobsMeta);
+  jobsMetaRef.current = jobsMeta;
+  const loadingMoreRef = useRef(false);
+  const jobsRef = useRef<JobOffer[]>(jobs);
+  jobsRef.current = jobs;
+  const applicationsRef = useRef<Application[]>(applications);
+  applicationsRef.current = applications;
 
   /** Change d'onglet et l'inscrit dans l'historique du navigateur (bouton Précédent). */
   const setCurrentTab = (tab: TabId) => {
@@ -335,31 +387,39 @@ export default function App() {
     }
   };
 
-  /** Page suivante des sources (France Travail, Adzuna, Google Jobs, Jooble). */
-  const handleLoadMore = async () => {
-    if (loadingMore || !jobsMeta.hasMore) return;
+  /** Page suivante des sources (France Travail, Adzuna, Google Jobs, Jooble). Renvoie les offres ajoutées. */
+  const handleLoadMore = async (options: { quiet?: boolean } = {}): Promise<JobOffer[]> => {
+    const meta = jobsMetaRef.current;
+    if (loadingMoreRef.current || !meta.hasMore) return [];
     const searchId = lastSearchId.current;
-    const nextPage = (jobsMeta.page || 1) + 1;
+    const nextPage = (meta.page || 1) + 1;
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
       const res = await apiFetch('/api/jobs/search', { ...lastParams.current, page: nextPage });
       const data = await readApiJson<any>(res);
-      if (searchId !== lastSearchId.current) return;
+      if (searchId !== lastSearchId.current) return [];
       const incoming: JobOffer[] = Array.isArray(data.jobs) ? data.jobs : [];
+      const known = new Set(jobsRef.current.map(j => j.id));
+      const added = incoming.filter(j => !known.has(j.id));
       setJobs(prev => {
         const seen = new Set(prev.map(j => j.id));
         return [...prev, ...incoming.filter(j => !seen.has(j.id))];
       });
+      jobsMetaRef.current = { ...jobsMetaRef.current, page: nextPage, hasMore: !!data.hasMore && incoming.length > 0 };
       setJobsMeta(prev => ({
         ...prev,
         page: nextPage,
         hasMore: !!data.hasMore && incoming.length > 0,
         warnings: Array.from(new Set([...(prev.warnings || []), ...(Array.isArray(data.warnings) ? data.warnings : [])]))
       }));
-      if (!incoming.length) showToast('Fin des résultats', 'Les sources n’ont pas d’autres offres pour cette recherche.');
+      if (!incoming.length && !options.quiet) showToast('Fin des résultats', 'Les sources n’ont pas d’autres offres pour cette recherche.');
+      return added;
     } catch (e: any) {
-      showToast('Chargement impossible', e?.message || 'Réessayez dans un instant.', true);
+      if (!options.quiet) showToast('Chargement impossible', e?.message || 'Réessayez dans un instant.', true);
+      return [];
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
   };
@@ -579,6 +639,12 @@ export default function App() {
     ]);
     const dataLatex = await resLatex.json().catch(() => null);
     const dataLetter = await resLetter.json().catch(() => null);
+    // Limite de débit du serveur : l'erreur indique quand réessayer (utilisé par la série de l'assistant)
+    const limited = [resLatex, resLetter].find(r => r.status === 429);
+    if (limited) {
+      const retryAfter = Math.min(120, Math.max(1, Number(limited.headers.get('Retry-After')) || 60));
+      throw Object.assign(new Error(`Trop de requêtes : nouvel essai possible dans ${retryAfter} s.`), { retryAfter });
+    }
     if (!resLatex.ok || !dataLatex?.latexCode) {
       throw new Error(dataLatex?.message || dataLatex?.error || `Génération du CV impossible (${resLatex.status}).`);
     }
@@ -591,7 +657,7 @@ export default function App() {
   const buildApplication = (job: JobOffer, latexCode: string, coverLetter: string, source: string, template: CvTemplate = preferredTemplate()): Application => {
     const match = calculateCandidateMatch(userProfile.skills, job.skillsRequired);
     return {
-      id: `app-${Date.now()}`,
+      id: `app-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       userId: currentUser?.uid || 'guest',
       jobId: job.id,
       jobTitle: job.title,
@@ -618,15 +684,46 @@ export default function App() {
   };
 
   /** Dossier déjà créé pour cette offre (même id, ou même entreprise + même intitulé). */
-  const findExistingApplication = (job: JobOffer): Application | undefined => {
+  const findExistingApplication = (job: JobOffer, list: Application[] = applications): Application | undefined => {
     const norm = (v: string) => (v || '').toLowerCase().replace(/\s+/g, ' ').trim();
-    return applications.find(a => a.jobId === job.id
+    return list.find(a => a.jobId === job.id
       || (norm(a.company) === norm(job.company) && norm(a.jobTitle) === norm(job.title)));
+  };
+
+  /**
+   * Génère le CV et la lettre d'une offre et enregistre le dossier (complète une offre sauvegardée au lieu d'en créer un second).
+   * Lève une erreur si la génération échoue.
+   */
+  const prepareDossier = async (job: JobOffer, existing: Application | undefined, origin: string) => {
+    addLog({ type: 'latex', message: `Génération du CV et de la lettre pour ${job.title} — ${job.company}…` });
+    const { dataLatex, dataLetter } = await generateDossier(job);
+    const app: Application = {
+      ...buildApplication(job, dataLatex.latexCode, dataLetter.letter, origin),
+      ...(dataLatex.tailored ? { tailoredContent: dataLatex.tailored } : {}),
+      ...(dataLatex.analysis ? { offerAnalysis: dataLatex.analysis } : {})
+    };
+    if (existing) {
+      await patchApplication(existing.id, {
+        status: 'prepared',
+        dossierUpdatedAt: new Date().toISOString(),
+        latexResumeCode: app.latexResumeCode,
+        coverLetter: app.coverLetter,
+        template: app.template,
+        ...(app.tailoredContent ? { tailoredContent: app.tailoredContent } : {}),
+        ...(app.offerAnalysis ? { offerAnalysis: app.offerAnalysis } : {}),
+        logEvents: [...(existing.logEvents || []), ...app.logEvents]
+      });
+    } else {
+      await persistApplication(app);
+    }
+    const notices = [dataLatex.notice, dataLetter.notice].filter(Boolean).join(' ');
+    addLog({ type: 'success', message: `Dossier prêt : ${job.title} — ${job.company}.`, company: job.company, score: app.matchScore ?? undefined });
+    return { letter: dataLetter.letter as string, notices, appId: existing?.id || app.id };
   };
 
   /** Doit être appelé directement dans un gestionnaire de clic (ouverture du portail non bloquée). */
   const handleInstantAutoApply = async (job: JobOffer) => {
-    if (!job || isAgentRunning) return;
+    if (!job || agentBusyRef.current) return;
 
     // Contrôles synchrones AVANT toute attente
     const existing = findExistingApplication(job);
@@ -646,42 +743,13 @@ export default function App() {
     const portal = window.open(getApplyUrl(job), '_blank');
     if (portal) portal.opener = null;
 
-    setIsAgentRunning(true);
-    addLog({ type: 'latex', message: `Génération du CV et de la lettre pour ${job.title} — ${job.company}…` });
-
+    setAgentBusy(true);
     try {
-      const { dataLatex, dataLetter } = await generateDossier(job);
-      const app: Application = {
-        ...buildApplication(job, dataLatex.latexCode, dataLetter.letter, 'Dossier préparé (CV + lettre). Portail de l\'entreprise ouvert.'),
-        ...(dataLatex.tailored ? { tailoredContent: dataLatex.tailored } : {}),
-        ...(dataLatex.analysis ? { offerAnalysis: dataLatex.analysis } : {})
-      };
-      if (savedOnly && existing) {
-        // Offre déjà sauvegardée : on complète le même dossier au lieu d'en créer un second
-        await patchApplication(existing.id, {
-          status: 'prepared',
-          dossierUpdatedAt: new Date().toISOString(),
-          latexResumeCode: app.latexResumeCode,
-          coverLetter: app.coverLetter,
-          template: app.template,
-          ...(app.tailoredContent ? { tailoredContent: app.tailoredContent } : {}),
-          ...(app.offerAnalysis ? { offerAnalysis: app.offerAnalysis } : {}),
-          logEvents: [...(existing.logEvents || []), ...app.logEvents]
-        });
-      } else {
-        await persistApplication(app);
-      }
+      const { letter, notices } = await prepareDossier(job, savedOnly ? existing : undefined, 'Dossier préparé (CV + lettre). Portail de l\'entreprise ouvert.');
 
-      let copied = false;
-      try {
-        await navigator.clipboard.writeText(dataLetter.letter);
-        copied = true;
-      } catch {
-        // le presse-papiers peut être refusé hors clic : la lettre reste disponible dans Candidatures
-      }
+      // Peut échouer (portail ouvert au premier plan, clic trop ancien) : la lettre reste disponible dans Candidatures
+      const copied = await copyToClipboard(letter);
 
-      const notices = [dataLatex.notice, dataLetter.notice].filter(Boolean).join(' ');
-      addLog({ type: 'success', message: `Dossier prêt : ${job.title} — ${job.company}.`, company: job.company, score: app.matchScore ?? undefined });
       showToast(
         'Dossier prêt',
         `${portal ? 'Le portail est ouvert. ' : 'Votre navigateur a bloqué l\'ouverture du portail : utilisez « Postuler en ligne ». '}${copied ? 'La lettre est copiée. ' : 'La lettre est disponible dans Candidatures. '}${notices}`
@@ -691,34 +759,237 @@ export default function App() {
       addLog({ type: 'alert', message: `Échec pour ${job.company} : ${e?.message || 'erreur inconnue'}` });
       showToast('Dossier non préparé', e?.message || 'Une erreur est survenue lors de la préparation du dossier.', true);
     } finally {
-      setIsAgentRunning(false);
+      setAgentBusy(false);
     }
   };
 
-  /** Cycle de l'assistant : meilleure offre non traitée respectant le seuil et les contrats préférés. */
+  /**
+   * Offres que l'assistant peut traiter, de la plus compatible à la moins compatible,
+   * avec le détail des offres écartées (affiché dans le journal).
+   */
+  const selectAgentCandidates = (list: JobOffer[], exclude: Set<string> = new Set()) => {
+    const profile = profileRef.current;
+    const threshold = profile.minMatchScore ?? 60;
+    const contracts = profile.preferredContracts || [];
+    const skipped = { treated: 0, contract: 0, unscored: 0, below: 0 };
+    const picked: { job: JobOffer; score: number; existing?: Application }[] = [];
+    for (const job of list) {
+      if (exclude.has(job.id)) continue;
+      const existing = findExistingApplication(job, applicationsRef.current);
+      // Une offre simplement sauvegardée reste éligible : son dossier sera complété
+      if (existing && !(existing.status === 'detected' && !existing.latexResumeCode)) { skipped.treated++; continue; }
+      if (contracts.length && !contracts.includes(job.contractType)) { skipped.contract++; continue; }
+      const score = calculateCandidateMatch(profile.skills, job.skillsRequired).score;
+      if (score === null) { skipped.unscored++; continue; }
+      if (score < threshold) { skipped.below++; continue; }
+      picked.push({ job, score, existing });
+    }
+    picked.sort((a, b) => b.score - a.score);
+    return { picked, skipped, threshold, contracts };
+  };
+
+  const describeSkipped = (sk: { treated: number; contract: number; unscored: number; below: number }, threshold: number) => {
+    const parts = [
+      sk.treated && `${sk.treated} déjà dans vos candidatures`,
+      sk.contract && `${sk.contract} hors des contrats choisis`,
+      sk.below && `${sk.below} sous ${threshold} %`,
+      sk.unscored && `${sk.unscored} sans compétences détectées (dont candidatures spontanées)`
+    ].filter(Boolean);
+    return parts.length ? `Écartées : ${parts.join(', ')}.` : '';
+  };
+
+  /**
+   * Trouve les prochaines offres à traiter : offres affichées, puis pages suivantes des sources si besoin.
+   * `wanted` : nombre d'offres souhaitées.
+   */
+  const findAgentTargets = async (wanted: number, exclude: Set<string> = new Set()) => {
+    let pool = jobsRef.current;
+    let sel = selectAgentCandidates(pool, exclude);
+    addLog({ type: 'scan', message: `Analyse de ${pool.length} offres (seuil ${sel.threshold} %, contrats : ${sel.contracts.length ? sel.contracts.map(c => CONTRACT_LABELS[c] || c).join(', ') : 'tous'}). ${describeSkipped(sel.skipped, sel.threshold)}` });
+    // Pas assez d'offres retenues : jusqu'à 3 pages supplémentaires des sources
+    for (let i = 0; i < 3 && sel.picked.length < wanted && jobsMetaRef.current.hasMore && !agentStopRef.current; i++) {
+      addLog({ type: 'scan', message: 'Recherche d’offres supplémentaires auprès des sources…' });
+      const added = await handleLoadMore({ quiet: true });
+      if (!added.length) break;
+      pool = [...pool, ...added];
+      sel = selectAgentCandidates(pool, exclude);
+      addLog({ type: 'scan', message: `${added.length} nouvelle(s) offre(s) chargée(s).` });
+    }
+    return sel.picked.slice(0, wanted);
+  };
+
+  /** Cycle de l'assistant : meilleure offre non traitée, dossier préparé et portail ouvert. */
   const handleTriggerAgentCycle = async () => {
+    if (agentBusyRef.current) return;
     if (userProfile.skills.length === 0) {
       showToast('Profil incomplet', 'Importez votre CV pour que l\'assistant puisse évaluer les offres.', true);
       return;
     }
-    const threshold = userProfile.minMatchScore ?? 60;
-    const contracts = userProfile.preferredContracts || [];
-    const best = jobs
-      .filter(j => !findExistingApplication(j))
-      .filter(j => contracts.length === 0 || contracts.includes(j.contractType))
-      .map(j => ({ job: j, score: calculateCandidateMatch(userProfile.skills, j.skillsRequired).score }))
-      .filter(x => x.score !== null && x.score >= threshold)
-      .sort((a, b) => (b.score as number) - (a.score as number))[0];
-
-    addLog({ type: 'scan', message: `Analyse de ${jobs.length} offres (seuil ${threshold} %, contrats : ${contracts.length ? contracts.join(', ') : 'tous'}).` });
-
-    if (!best) {
-      addLog({ type: 'match', message: 'Aucune nouvelle offre ne respecte vos critères.' });
+    agentStopRef.current = false;
+    // Offres déjà chargées : le portail s'ouvre pendant le clic (sinon le navigateur le bloque)
+    const sel = selectAgentCandidates(jobsRef.current);
+    const immediate = sel.picked[0];
+    if (immediate) {
+      addLog({ type: 'scan', message: `Analyse de ${jobsRef.current.length} offres (seuil ${sel.threshold} %). ${describeSkipped(sel.skipped, sel.threshold)}` });
+      addLog({ type: 'match', message: `Offre retenue : ${immediate.job.title} — ${immediate.job.company}.`, score: immediate.score });
+      await handleInstantAutoApply(immediate.job);
+      return;
+    }
+    setAgentBusy(true);
+    let target: { job: JobOffer; score: number; existing?: Application } | undefined;
+    try {
+      target = (await findAgentTargets(1))[0];
+    } finally {
+      setAgentBusy(false);
+    }
+    if (!target) {
+      const threshold = profileRef.current.minMatchScore ?? 60;
+      addLog({ type: 'match', message: 'Aucune nouvelle offre ne respecte vos critères. Lancez une autre recherche ou baissez le seuil.' });
       showToast('Aucune offre retenue', `Aucune nouvelle offre n'atteint ${threshold} % de compatibilité avec vos critères.`);
       return;
     }
-    addLog({ type: 'match', message: `Offre retenue : ${best.job.title} — ${best.job.company}.`, score: best.score as number });
-    await handleInstantAutoApply(best.job);
+    // Offre trouvée sur une page suivante : le dossier est préparé, le portail s'ouvrira depuis la file d'envoi
+    addLog({ type: 'match', message: `Offre retenue : ${target.job.title} — ${target.job.company}.`, score: target.score });
+    setAgentBusy(true);
+    try {
+      await prepareDossier(target.job, target.existing, 'Dossier préparé par l\'assistant.');
+      showToast('Dossier prêt', 'Retrouvez-le dans « Dossiers prêts à envoyer » pour ouvrir le portail.');
+    } catch (e: any) {
+      addLog({ type: 'alert', message: `Échec pour ${target.job.company} : ${e?.message || 'erreur inconnue'}` });
+      showToast('Dossier non préparé', e?.message || 'Une erreur est survenue.', true);
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+
+  /**
+   * Série : prépare jusqu'à `count` dossiers d'affilée (CV + lettre), sans ouvrir de portail.
+   * Les dossiers rejoignent la file « prêts à envoyer ». Rien n'est envoyé à la place de l'utilisateur.
+   */
+  const handleAgentBatch = async (count: number) => {
+    if (agentBusyRef.current) return;
+    if (userProfile.skills.length === 0 || userProfile.experiences.length === 0) {
+      showToast('Profil incomplet', 'Importez votre CV (compétences et expériences) avant de lancer l\'assistant.', true);
+      return;
+    }
+    agentStopRef.current = false;
+    setAgentBusy(true);
+    setAgentProgress({ done: 0, total: count });
+    let done = 0;
+    let failed = 0;
+    const tried = new Set<string>();
+    try {
+      addLog({ type: 'scan', message: `Série lancée : jusqu'à ${count} dossier(s).` });
+      const targets = await findAgentTargets(count, tried);
+      if (!targets.length) {
+        addLog({ type: 'match', message: 'Aucune nouvelle offre ne respecte vos critères. Lancez une autre recherche ou baissez le seuil.' });
+        showToast('Aucune offre retenue', 'Aucune nouvelle offre ne respecte vos critères.');
+        return;
+      }
+      setAgentProgress({ done: 0, total: targets.length });
+      for (const t of targets) {
+        if (agentStopRef.current) {
+          addLog({ type: 'alert', message: 'Série interrompue à votre demande.' });
+          break;
+        }
+        tried.add(t.job.id);
+        addLog({ type: 'match', message: `Offre retenue : ${t.job.title} — ${t.job.company}.`, score: t.score });
+        let ok = false;
+        let waited = false;
+        while (!ok && !agentStopRef.current) {
+          try {
+            await prepareDossier(t.job, t.existing, 'Dossier préparé par l\'assistant (série).');
+            ok = true;
+          } catch (e: any) {
+            // Limite de débit : pause puis nouvel essai (une seule fois par offre)
+            if (typeof e?.retryAfter === 'number' && !waited) {
+              waited = true;
+              addLog({ type: 'scan', message: `Limite de requêtes atteinte : reprise automatique dans ${e.retryAfter} s.` });
+              for (let s = 0; s < e.retryAfter && !agentStopRef.current; s++) await new Promise(r => setTimeout(r, 1000));
+              continue;
+            }
+            addLog({ type: 'alert', message: `Échec pour ${t.job.company} : ${e?.message || 'erreur inconnue'}` });
+            break;
+          }
+        }
+        if (ok) done++;
+        else if (!agentStopRef.current) failed++;
+        // Deux échecs d'affilée hors limite de débit (service IA indisponible…) : inutile d'insister
+        if (!ok && failed >= 2 && done === 0) {
+          addLog({ type: 'alert', message: 'Série arrêtée : la génération échoue. Réessayez plus tard.' });
+          break;
+        }
+        setAgentProgress({ done: done + failed, total: targets.length });
+      }
+      showToast(
+        done ? `${done} dossier(s) prêt(s)` : 'Aucun dossier préparé',
+        done
+          ? `Ouvrez chaque portail depuis « Dossiers prêts à envoyer ».${failed ? ` ${failed} échec(s) : voir le journal.` : ''}`
+          : 'Consultez le journal de l’assistant.',
+        !done
+      );
+    } finally {
+      setAgentBusy(false);
+      setAgentProgress(null);
+    }
+  };
+
+  const handleStopAgent = () => {
+    agentStopRef.current = true;
+    addLog({ type: 'alert', message: 'Arrêt demandé : la série s’arrête après le dossier en cours.' });
+  };
+
+  /**
+   * File d'envoi : ouvre le portail (pendant le clic), copie la lettre et télécharge le CV en PDF si possible.
+   * La candidature est marquée « envoyée » par l'utilisateur, une fois qu'il a réellement postulé.
+   */
+  const handleOpenQueuedApplication = async (app: Application) => {
+    const portal = app.jobUrl ? window.open(app.jobUrl, '_blank') : null;
+    if (portal) portal.opener = null;
+    // Copie dans la même tâche que l'ouverture : la page a encore le focus
+    const copiedNow = !!app.coverLetter && copyToClipboardSync(app.coverLetter);
+    const [copiedLater, pdf] = await Promise.all([
+      !copiedNow && app.coverLetter ? copyToClipboard(app.coverLetter) : Promise.resolve(false),
+      downloadApplicationPdf(app).catch(() => false)
+    ]);
+    const copied = copiedNow || copiedLater;
+    await patchApplication(app.id, {
+      logEvents: [...(app.logEvents || []), { timestamp: new Date().toLocaleString('fr-FR'), message: 'Portail ouvert depuis la file d\'envoi.' }]
+    });
+    showToast(
+      portal ? 'Portail ouvert' : (app.jobUrl ? 'Portail bloqué' : 'Pas de lien de candidature'),
+      [
+        !portal && app.jobUrl ? 'Autorisez les fenêtres pour ce site ou utilisez « Postuler sur le site » dans Candidatures.' : '',
+        copied ? 'La lettre est copiée.' : '',
+        pdf ? 'Le CV (PDF) est téléchargé.' : 'CV PDF indisponible ici : ouvrez le dossier pour l’exporter.',
+        'Cliquez sur « J’ai postulé » une fois la candidature envoyée.'
+      ].filter(Boolean).join(' '),
+      !portal && !!app.jobUrl
+    );
+  };
+
+  /** Télécharge le CV du dossier en PDF (LaTeX ou rendu Chromium côté serveur). Renvoie false si impossible. */
+  const downloadApplicationPdf = async (app: Application): Promise<boolean> => {
+    if (!app.latexResumeCode) return false;
+    const job = { title: app.jobTitle, company: app.company, skillsRequired: app.skillsRequired || [] };
+    const res = await apiFetch('/api/latex/compile', {
+      latexCode: app.latexResumeCode,
+      candidate: profileRef.current,
+      job,
+      template: app.template || preferredTemplate(),
+      tailored: app.tailoredContent
+    });
+    if (!res.ok) return false;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `CV_${(profileRef.current.fullName || 'Candidat').replace(/\s+/g, '_')}_${(app.company || 'Poste').replace(/[^\p{L}\p{N}]+/gu, '_')}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    return true;
   };
 
   const handleDeleteApplication = async (appId: string) => {
@@ -876,7 +1147,7 @@ export default function App() {
             jobs={jobs}
             jobsMeta={jobsMeta}
             initialSearch={lastParams.current}
-            onLoadMore={handleLoadMore}
+            onLoadMore={() => { handleLoadMore(); }}
             loadingMore={loadingMore}
             savedSearches={userProfile.savedSearches || []}
             onSaveSearch={handleSaveSearch}
@@ -910,10 +1181,20 @@ export default function App() {
             userProfile={userProfile}
             onSaveSettings={(patch) => { handleSaveProfile({ ...userProfile, ...patch }, { silent: true }).catch(() => {}); }}
             onTriggerAgentCycle={handleTriggerAgentCycle}
+            onTriggerBatch={handleAgentBatch}
+            onStop={handleStopAgent}
+            progress={agentProgress}
             isAgentRunning={isAgentRunning}
             agentLogs={agentLogs}
             onGoToInterviews={() => setCurrentTab('interview')}
+            onGoToOffers={() => setCurrentTab('radar')}
             preparedCount={preparedCount}
+            jobsCount={jobs.length}
+            searchLabel={[lastParams.current.query, jobsMeta.resolvedLocation || lastParams.current.location].filter(Boolean).join(' · ')}
+            queue={applications.filter(a => a.status === 'prepared' && !!a.latexResumeCode)}
+            onOpenQueued={handleOpenQueuedApplication}
+            onMarkApplied={(app) => handleUpdateAppStatus(app.id, 'applied')}
+            onOpenDossier={openLatexForApplication}
           />
         )}
 
