@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCvSemantically, isParsedCvEmpty } from '../src/semanticCvParser.ts';
+import { parseCvSemantically, isParsedCvEmpty, extractTechnologies } from '../src/semanticCvParser.ts';
 
 const CV = `Sarah Benali
 Chargée de Communication
@@ -47,4 +47,25 @@ test('rien n\'est inventé sur un texte illisible', () => {
   assert.deepEqual(p.education, []);
   assert.deepEqual(p.languages, []);
   assert.equal(isParsedCvEmpty(p), true);
+});
+
+test('compétences du profil : seuls les outils écrits dans le CV, jamais un nom de groupe', () => {
+  const p = parseCvSemantically('Karim Dupont\nDéveloppeur\nkarim@mail.fr\nEXPÉRIENCES\nDéveloppeur - Studio X | 2021 - Présent\nMise en place de Docker et MySQL, retouches Photoshop\nCOMPÉTENCES\nReact, aws, ci/cd, UI/UX / Figma');
+  for (const s of ['Docker', 'MySQL', 'Photoshop', 'AWS', 'CI/CD', 'UI/UX', 'Figma', 'React']) assert.ok(p.skills.includes(s), `${s} manquant : ${p.skills}`);
+  assert.ok(!p.skills.some(s => /Kubernetes|Illustrator|InDesign|PostgreSQL|GCP|Azure/.test(s)), `compétence inventée : ${p.skills}`);
+  assert.ok(!p.skills.includes('ci') && !p.skills.includes('cd'));
+});
+
+test('offres : les noms de groupe du catalogue restent utilisés pour le calcul du score', () => {
+  assert.deepEqual(extractTechnologies('Stack : Docker, Git'), ['Docker & Kubernetes', 'Git & CI/CD']);
+});
+
+test('poste / entreprise et diplôme / établissement séparés par un tiret long ou une virgule', () => {
+  const p = parseCvSemantically('Karim Dupont\nkarim@mail.fr\nEXPÉRIENCES\n2021 – Présent Développeur — Studio X\n- Développement React et API\nFORMATION\nLicence informatique — Avignon Université 2021\nBTS SIO, Lycée Mistral 2019\nCOMPÉTENCES\nReact');
+  assert.equal(p.experiences[0].title, 'Développeur');
+  assert.equal(p.experiences[0].company, 'Studio X');
+  assert.deepEqual(p.education.map(e => [e.degree, e.institution, e.year]), [
+    ['Licence informatique', 'Avignon Université', '2021'],
+    ['BTS SIO', 'Lycée Mistral', '2019']
+  ]);
 });

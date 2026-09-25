@@ -263,31 +263,64 @@ const UNIVERSAL_SKILLS_CATALOG: { name: string; aliases: string[] }[] = [
   { name: 'Méthodologie Agile / Scrum', aliases: ['agile', 'scrum', 'kanban', 'jira'] }
 ];
 
-export function extractTechnologies(text: string): string[] {
+/** Nom de groupe (« Docker & Kubernetes », « Suite Adobe (Photoshop, …) ») : il couvre plusieurs outils distincts. */
+const isGroupName = (name: string) => /[&(),]|\s\/\s/.test(name);
+
+/** Libellé lisible d'un terme trouvé tel quel dans le texte (« docker » → « Docker », « aws » → « AWS »). */
+function displayTerm(found: string): string {
+  const t = found.trim();
+  if (t !== t.toLowerCase()) return t; // casse d'origine conservée (« MySQL », « GitLab »)
+  if ((t.length <= 4 || /^[a-z]{2,4}\/[a-z]{2,4}$/.test(t)) && !/\s/.test(t)) return t.toUpperCase();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/**
+ * Compétences reconnues dans un texte.
+ * - par défaut (offres, contrôles) : nom du catalogue, éventuellement collectif (« Docker & Kubernetes ») ;
+ * - `precise` (profil du candidat) : pour un nom collectif, seuls les outils réellement écrits dans le texte
+ *   (« Docker » et non « Docker & Kubernetes »), pour ne rien ajouter au CV.
+ */
+export function extractTechnologies(text: string, options: { precise?: boolean } = {}): string[] {
   const found: string[] = [];
   const lower = text.toLowerCase();
 
   for (const item of UNIVERSAL_SKILLS_CATALOG) {
+    const precise = options.precise && isGroupName(item.name);
     for (const rawAlias of item.aliases) {
       // « =XXX » : alias sensible à la casse (sigles ambigus : C, Go, Vue, IA, Word…)
       const strict = rawAlias.startsWith('=');
       const alias = strict ? rawAlias.slice(1) : rawAlias;
       try {
-        const regex = new RegExp(`(^|[^a-zA-Z0-9_#+À-ÿ])${alias}([^a-zA-Z0-9_#+À-ÿ'’]|$)`, strict ? '' : 'i');
-        if (regex.test(text)) {
-          found.push(item.name);
-          break;
+        const regex = new RegExp(`(^|[^a-zA-Z0-9_#+À-ÿ])(${alias})([^a-zA-Z0-9_#+À-ÿ'’]|$)`, strict ? '' : 'i');
+        const m = text.match(regex);
+        if (m) {
+          if (!precise) {
+            found.push(item.name);
+            break;
+          }
+          found.push(displayTerm(m[2]));
         }
       } catch {
         if (!strict && lower.includes(alias.toLowerCase())) {
-          found.push(item.name);
-          break;
+          if (!precise) {
+            found.push(item.name);
+            break;
+          }
+          const i = lower.indexOf(alias.toLowerCase());
+          found.push(displayTerm(text.slice(i, i + alias.length)));
         }
       }
     }
   }
 
-  return Array.from(new Set(found));
+  // Dédoublonnage insensible à la casse
+  const seen = new Set<string>();
+  return found.filter(f => {
+    const k = f.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -514,14 +547,15 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
   // Pas d'accroche inventée : si le CV n'en contient pas, le champ reste vide.
 
   // 3.7 Skills Extraction
-  const allDetectedSkills = extractTechnologies(text);
+  const allDetectedSkills = extractTechnologies(text, { precise: true });
   const skillsSec = sections.find(s => s.type === 'skills');
   const sectionSkills: string[] = [];
   if (skillsSec) {
     for (const l of skillsSec.lines) {
       // Extract from lists separated by commas, bullets or pipes
       const parts = l.replace(/^[-•*–>|]+/, '')
-        .split(/[,;|•·/]+/)
+        // « / » ne sépare que s'il est entouré d'espaces : « CI/CD », « UI/UX » restent entiers
+        .split(/[,;|•·]+|\s\/\s/)
         .map(p => p.trim())
         .filter(p => p.length >= 2 && p.length <= 35 && !p.includes(':'));
       for (const p of parts) {
@@ -575,8 +609,8 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
           if (nonDateParts.length >= 1) {
             expTitle = nonDateParts[0];
             // « Poste - Entreprise | dates »
-            if (nonDateParts.length === 1 && /\s[-–]\s/.test(expTitle)) {
-              const [t, c] = expTitle.split(/\s+[-–]\s+/);
+            if (nonDateParts.length === 1 && /\s[-–—]\s/.test(expTitle)) {
+              const [t, c] = expTitle.split(/\s+[-–—]\s+/);
               expTitle = t.trim();
               company = (c || '').trim();
             }
@@ -597,8 +631,8 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
             const parts = restOfLine.split(/\s+(?:chez|at)\s+/i);
             expTitle = parts[0]?.trim();
             company = parts[1]?.trim();
-          } else if (restOfLine.includes(' - ') || restOfLine.includes(' – ')) {
-            const parts = restOfLine.split(/\s+[-–]\s+/);
+          } else if (/\s[-–—]\s/.test(restOfLine)) {
+            const parts = restOfLine.split(/\s+[-–—]\s+/);
             expTitle = parts[0]?.trim();
             company = parts[1]?.trim();
           } else {
@@ -642,7 +676,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
         endDate: '',
         current: false,
         bullets: rawBullets.slice(0, 5),
-        technologies: extractTechnologies(rawBullets.join(' ')).slice(0, 5)
+        technologies: extractTechnologies(rawBullets.join(' '), { precise: true }).slice(0, 5)
       });
     }
   }
@@ -666,7 +700,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
         let degree = cleanLine;
         let institution = '';
 
-        if (cleanLine.includes('|') || cleanLine.includes('-') || cleanLine.includes('–')) {
+        if (/[|–—]|\s-\s/.test(cleanLine)) {
           const parts = cleanLine.split(/[|–—]|\s+-\s+/).map(p => p.trim()).filter(Boolean);
           if (parts.length >= 2) {
             degree = parts[0];
@@ -674,7 +708,12 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
           }
         } else {
           const instMatch = cleanLine.match(/(?:université|universite|école|ecole|iut|faculté|institut|lycée|insa|polytech|epita|epitech|sorbonne)/i);
-          if (instMatch) {
+          const comma = cleanLine.indexOf(',');
+          if (instMatch && comma > 0 && comma < (instMatch.index ?? 0)) {
+            // « BTS SIO, Lycée Mistral » : diplôme complet puis établissement
+            degree = cleanLine.slice(0, comma).trim();
+            institution = cleanLine.slice(comma + 1).trim();
+          } else if (instMatch) {
             institution = cleanLine;
             degree = degreeMatch ? degreeMatch[0].toUpperCase() : 'Diplôme';
           }
@@ -708,7 +747,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
             id: `proj-${projects.length + 1}`,
             name: projName,
             description: projDesc || '',
-            technologies: extractTechnologies(`${projName} ${projDesc}`).slice(0, 4)
+            technologies: extractTechnologies(`${projName} ${projDesc}`, { precise: true }).slice(0, 4)
           });
         }
         projName = l.replace(/^[:\s-]+/, '').trim();
@@ -722,7 +761,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
         id: `proj-${projects.length + 1}`,
         name: projName,
         description: projDesc || '',
-        technologies: extractTechnologies(`${projName} ${projDesc}`).slice(0, 4)
+        technologies: extractTechnologies(`${projName} ${projDesc}`, { precise: true }).slice(0, 4)
       });
     }
   }
@@ -783,7 +822,7 @@ function finalizeExperience(rawExp: Partial<Experience> & { rawLines: string[] }
     }
   }
 
-  const techDetected = extractTechnologies(fullContent);
+  const techDetected = extractTechnologies(fullContent, { precise: true });
 
   return {
     id: `exp-${Date.now()}-${index + 1}`,
