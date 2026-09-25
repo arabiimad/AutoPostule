@@ -10,6 +10,7 @@ import { searchRealJobs, hasRealSources, getSourceStatus } from "./server/jobSou
 import { generateFallbackLatex, normalizeTemplate, templateInstructions, compileLatex, detectLatexCompiler, TEMPLATES } from "./server/latex.ts";
 import { authMiddleware, getAuthMode } from "./server/auth.ts";
 import { renderCvHtml, generatePdfFromHtml, isChromiumRendererAvailable, closeBrowser } from "./server/pdf.ts";
+import { evaluateStarLocally } from "./server/starCheck.ts";
 import { extractTextFromDocx } from "./server/docx.ts";
 import { kv, countApiCall, getQuotaUsage } from "./server/store.ts";
 import { createHash } from "node:crypto";
@@ -946,7 +947,9 @@ Fournis 6 à 8 questions, dont au moins une sur chaque compétence manquante.`;
 
     if (!answer || !String(answer).trim()) return unavailable("Rédigez votre réponse pour obtenir une évaluation.");
     const ai = getGeminiClient();
-    if (!ai) return unavailable("Évaluation IA indisponible (service hors ligne).");
+    // Sans IA (ou si elle échoue) : évaluation STAR automatique, sans réécriture
+    const local = () => res.json(evaluateStarLocally(String(answer)));
+    if (!ai) return local();
 
     try {
       const prompt = `Tu es un recruteur expert et coach d'entretien.
@@ -969,9 +972,9 @@ Analyse avec la méthode STAR. Renvoie uniquement un JSON valide :
       if (parsed && typeof parsed.score === "number") {
         return res.json({ source: "gemini-ai", ...parsed });
       }
-      return unavailable("Impossible d'extraire l'évaluation IA. Réessayez.");
+      return local();
     } catch {
-      return unavailable("Service d'évaluation IA indisponible.");
+      return local();
     }
   });
 
