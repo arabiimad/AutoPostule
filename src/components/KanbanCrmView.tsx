@@ -10,6 +10,8 @@ interface KanbanCrmViewProps {
   onOpenLatexForApp: (app: Application) => void;
   onOpenInterviewPrep: (app: Application) => void;
   onUpdateAppStatus: (appId: string, newStatus: ApplicationStatus) => void;
+  /** Postuler : ouvre le portail, copie la lettre et télécharge le CV en PDF. Sans lui : simple lien. */
+  onApply?: (app: Application) => void;
   /** Ouvre le brouillon de relance d'une candidature. */
   onFollowUp?: (app: Application) => void;
   onDelete?: (appId: string) => void;
@@ -35,9 +37,10 @@ const AppCard: React.FC<{
   onOpenLatex: () => void;
   onInterview: () => void;
   onStatus: (s: ApplicationStatus) => void;
+  onApply?: () => void;
   onFollowUp?: () => void;
   onDelete?: () => void;
-}> = ({ app, onOpenLatex, onInterview, onStatus, onFollowUp, onDelete }) => {
+}> = ({ app, onOpenLatex, onInterview, onStatus, onApply, onFollowUp, onDelete }) => {
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const hasDossier = !!app.latexResumeCode;
@@ -97,7 +100,9 @@ const AppCard: React.FC<{
         )}
         {app.status === 'prepared' && (
           <>
-            {app.jobUrl && <LinkButton href={app.jobUrl} target="_blank" rel="noopener noreferrer" variant="primary" size="sm">Postuler sur le site <ExternalLink className="h-3.5 w-3.5" /></LinkButton>}
+            {app.jobUrl && (onApply && hasDossier
+              ? <Button variant="primary" size="sm" onClick={onApply} title="Ouvre le site, copie la lettre et télécharge le CV en PDF">Postuler sur le site <ExternalLink className="h-3.5 w-3.5" /></Button>
+              : <LinkButton href={app.jobUrl} target="_blank" rel="noopener noreferrer" variant="primary" size="sm">Postuler sur le site <ExternalLink className="h-3.5 w-3.5" /></LinkButton>)}
             <Button variant="secondary" size="sm" onClick={() => onStatus('applied')}><Send className="h-3.5 w-3.5" /> J’ai postulé</Button>
           </>
         )}
@@ -148,6 +153,7 @@ export const KanbanCrmView: React.FC<KanbanCrmViewProps> = ({
   onOpenLatexForApp,
   onOpenInterviewPrep,
   onUpdateAppStatus,
+  onApply,
   onFollowUp,
   onDelete,
   onGoToOffers,
@@ -180,6 +186,7 @@ export const KanbanCrmView: React.FC<KanbanCrmViewProps> = ({
       onOpenLatex={() => onOpenLatexForApp(app)}
       onInterview={() => onOpenInterviewPrep(app)}
       onStatus={(s) => onUpdateAppStatus(app.id, s)}
+      onApply={onApply ? () => onApply(app) : undefined}
       onFollowUp={onFollowUp ? () => onFollowUp(app) : undefined}
       onDelete={onDelete ? () => onDelete(app.id) : undefined}
     />

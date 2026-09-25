@@ -954,12 +954,12 @@ export default function App() {
     ]);
     const copied = copiedNow || copiedLater;
     await patchApplication(app.id, {
-      logEvents: [...(app.logEvents || []), { timestamp: new Date().toLocaleString('fr-FR'), message: 'Portail ouvert depuis la file d\'envoi.' }]
+      logEvents: [...(app.logEvents || []), { timestamp: new Date().toLocaleString('fr-FR'), message: 'Portail de candidature ouvert (lettre copiée, CV PDF).' }]
     });
     showToast(
       portal ? 'Portail ouvert' : (app.jobUrl ? 'Portail bloqué' : 'Pas de lien de candidature'),
       [
-        !portal && app.jobUrl ? 'Autorisez les fenêtres pour ce site ou utilisez « Postuler sur le site » dans Candidatures.' : '',
+        !portal && app.jobUrl ? 'Autorisez l’ouverture des fenêtres pour ce site, puis réessayez.' : '',
         copied ? 'La lettre est copiée.' : '',
         pdf ? 'Le CV (PDF) est téléchargé.' : 'CV PDF indisponible ici : ouvrez le dossier pour l’exporter.',
         'Cliquez sur « J’ai postulé » une fois la candidature envoyée.'
@@ -1254,6 +1254,7 @@ export default function App() {
             onOpenLatexForApp={openLatexForApplication}
             onOpenInterviewPrep={(app) => setSelectedAppForInterview(app)}
             onUpdateAppStatus={handleUpdateAppStatus}
+            onApply={handleOpenQueuedApplication}
             onFollowUp={(app) => setFollowUpApp(app)}
             onDelete={async (id) => { await handleDeleteApplication(id); showToast('Candidature supprimée', 'Le dossier a été retiré de votre suivi.'); }}
             onGoToOffers={() => setCurrentTab('radar')}
