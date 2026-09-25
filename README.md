@@ -32,7 +32,7 @@ npm start                 # sert dist/ ; port = variable PORT (3000 par défaut)
 | `npm run check:ai` | Teste la clé Gemini (modèles accessibles) et la génération d'un CV d'exemple |
 | `npm run deploy:rules` | Déploie les règles Firestore |
 
-Intégration continue : déplacez `ci/github-ci.yml` vers `.github/workflows/ci.yml` (types, tests, build et tests de bout en bout à chaque push sur GitHub).
+Intégration continue : `.github/workflows/ci.yml` (types, tests, build et tests de bout en bout à chaque push sur GitHub).
 
 ## Sources d'offres (.env)
 
@@ -77,6 +77,18 @@ Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accè
 | `PORT` | Port d'écoute |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Facultatif : cache, limite de débit et quotas partagés entre plusieurs serveurs (Redis Upstash) |
 | `LATEX_COMPILER` | `tectonic`, `pdflatex` ou `off` pour le bouton « Télécharger le PDF » |
+| `PDF_RENDERER` | `off` pour désactiver le rendu PDF par Chromium (utilisé quand LaTeX n'est pas installé) |
+| `CHROMIUM_PATH` | Chromium déjà installé sur la machine, si le navigateur de Playwright n'est pas téléchargé |
+
+## CV en PDF en production
+
+Le CV est compilé par LaTeX si `tectonic` ou `pdflatex` est installé ; sinon il est rendu par Chromium (Playwright) à partir du même contenu. Sur le serveur, après `npm ci` :
+
+```bash
+npx playwright install --with-deps chromium   # une fois, pour le rendu PDF sans LaTeX
+```
+
+Sans LaTeX ni Chromium, le bouton PDF est masqué et Overleaf reste proposé.
 
 ## Fonctionnalités
 
@@ -84,6 +96,7 @@ Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accè
 - **Alertes** : enregistrez une recherche ; les nouvelles offres sont comptées à chaque ouverture (notifications du navigateur en option).
 - **Liens partageables** : l'onglet, la recherche et l'offre ouverte sont dans l'URL ; Précédent / Suivant fonctionnent.
 - **Profil** : import du CV en PDF, Word (.docx), image ou texte ; rien n'est inventé.
+- **Assistant** : choisit les meilleures offres selon vos critères (compatibilité, contrats), prépare CV + lettre un par un ou en série (3, 5, 10), charge les pages suivantes des sources si besoin et explique les offres écartées. File « Dossiers prêts à envoyer » : ouverture du portail, lettre copiée, CV en PDF téléchargé. Rien n'est envoyé à votre place.
 - **Studio CV** : CV LaTeX en 3 modèles, PDF, lettre ; les versions précédentes sont conservées (onglet Historique).
 - **Candidatures** : suivi en 6 étapes, relances à J+7 avec rappel calendrier (.ics), statistiques (taux de réponse, délai, efficacité par source), export Excel (CSV) et sauvegarde / restauration JSON.
 - **Entretiens** : synthèse, pitch, questions probables, entraînement avec évaluation STAR.
