@@ -193,30 +193,68 @@ begin
 end $$;
 
 -- Réserve le droit d'envoyer une candidature, de façon atomique :
--- automatisation active et non en pause, limite quotidienne, aucune tentative antérieure pour cette offre.
--- Renvoie l'identifiant de la tentative, ou null avec la raison dans p_reason.
+-- automatisation active et non en pause, limite quotidienne, aucun envoi antérieur pour cette offre.
+-- Une tentative qui n'a jamais atteint l'envoi (réservée, annulée, en attente d'action, refusée par le
+-- fournisseur) est reprise ; dès l'état « submitting », plus aucun nouvel envoi n'est possible (ALREADY_ATTEMPTED).
+-- Renvoie l'identifiant de la tentative, ou null avec la raison.
 create or replace function public.reserve_application_attempt(
   p_user uuid, p_offer text, p_channel text, p_destination text, p_profile_version text, p_documents jsonb, p_answers jsonb,
   out attempt_id uuid, out reason text)
 language plpgsql security definer set search_path = '' as $$
-declare pol public.automation_policies; today_count integer;
+declare pol public.automation_policies; today_count integer; prev public.application_attempts; has_prev boolean;
 begin
   -- Sérialise les réservations d'un même candidat (limite quotidienne exacte même avec plusieurs workers)
   perform pg_advisory_xact_lock(hashtext('attempts:' || p_user::text));
   select * into pol from public.automation_policies where user_id = p_user;
   if not found or not pol.enabled then reason := 'AUTOMATION_DISABLED'; return; end if;
   if pol.paused then reason := 'AUTOMATION_PAUSED'; return; end if;
-  if exists (select 1 from public.application_attempts where user_id = p_user and offer_id = p_offer) then
+  select * into prev from public.application_attempts where user_id = p_user and offer_id = p_offer;
+  has_prev := found;
+  if has_prev and prev.status in ('submitting', 'submitted', 'confirmed', 'uncertain') then
     reason := 'ALREADY_ATTEMPTED'; return;
   end if;
   select count(*) into today_count from public.application_attempts
    where user_id = p_user and created_at >= date_trunc('day', now() at time zone 'Europe/Paris') at time zone 'Europe/Paris'
      and status not in ('failed', 'cancelled', 'needs_user');
   if today_count >= pol.daily_limit then reason := 'DAILY_LIMIT'; return; end if;
-  insert into public.application_attempts (user_id, offer_id, channel, destination, profile_version, documents, answers)
-  values (p_user, p_offer, p_channel, p_destination, p_profile_version, coalesce(p_documents, '[]'), coalesce(p_answers, '{}'))
-  returning id into attempt_id;
+  if has_prev then
+    update public.application_attempts
+       set status = 'reserved', channel = p_channel, destination = p_destination, profile_version = p_profile_version,
+           documents = coalesce(p_documents, '[]'), answers = coalesce(p_answers, '{}'), error = null, created_at = now()
+     where id = prev.id
+    returning id into attempt_id;
+  else
+    insert into public.application_attempts (user_id, offer_id, channel, destination, profile_version, documents, answers)
+    values (p_user, p_offer, p_channel, p_destination, p_profile_version, coalesce(p_documents, '[]'), coalesce(p_answers, '{}'))
+    returning id into attempt_id;
+  end if;
 end $$;
+
+-- Résultat d'un envoi. Seuls ces passages sont permis :
+--   submitting → submitted | uncertain | failed (refus explicite du fournisseur : rien n'a été envoyé)
+--   submitted | uncertain → confirmed (preuve de réception trouvée)
+--   reserved → needs_user | cancelled | failed (avant tout envoi)
+create or replace function public.record_submission(p_attempt uuid, p_status text, p_proof jsonb default null, p_error text default null)
+returns boolean language plpgsql security definer set search_path = '' as $$
+declare a public.application_attempts;
+begin
+  select * into a from public.application_attempts where id = p_attempt for update;
+  if not found then return false; end if;
+  if not (
+       (a.status = 'submitting' and p_status in ('submitted', 'uncertain', 'failed'))
+    or (a.status in ('submitted', 'uncertain') and p_status = 'confirmed')
+    or (a.status = 'reserved' and p_status in ('needs_user', 'cancelled', 'failed'))
+  ) then return false; end if;
+  update public.application_attempts
+     set status = p_status,
+         proof = coalesce(p_proof, proof),
+         error = p_error,
+         submitted_at = case when p_status = 'submitted' then now() else submitted_at end
+   where id = p_attempt;
+  return true;
+end $$;
+revoke all on function public.record_submission(uuid, text, jsonb, text) from public, anon, authenticated;
+grant execute on function public.record_submission(uuid, text, jsonb, text) to service_role;
 
 -- Passe une tentative à l'état « envoi en cours » juste avant l'action, en revérifiant la pause.
 -- Après cet état, un délai dépassé donne « uncertain » : jamais de nouvel envoi aveugle.

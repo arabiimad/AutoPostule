@@ -74,8 +74,11 @@ test('réservation d’envoi : désactivée par défaut, puis limite quotidienne
 
 test('une seule tentative par candidat et par offre', { skip }, async () => {
   await sql(`update public.automation_policies set daily_limit = 20 where user_id = '${A}'`);
-  const again = await sql(`select coalesce(attempt_id::text, reason) from public.reserve_application_attempt('${A}', 'offre-1', 'email', 'rh@exemple.fr', 'v1', '[]', '{}')`);
-  assert.equal(again, 'ALREADY_ATTEMPTED');
+  const reserve = () => sql(`select coalesce(attempt_id::text, reason) from public.reserve_application_attempt('${A}', 'offre-1', 'email', 'rh@exemple.fr', 'v1', '[]', '{}')`);
+  const first = await reserve();
+  assert.equal(await reserve(), first, 'pas de seconde tentative : la même est reprise');
+  assert.equal(await sql(`select public.begin_submission('${first}')`), 'OK');
+  assert.equal(await reserve(), 'ALREADY_ATTEMPTED');
   await assert.rejects(sql(`insert into public.application_attempts (user_id, offer_id, channel, destination) values ('${A}', 'offre-1', 'email', 'x@y.fr')`));
 });
 
@@ -104,4 +107,20 @@ test('jetons OAuth jamais lisibles par le client', { skip }, async () => {
   await assert.rejects(asUser(A, 'select access_token_enc from public.mail_connections'));
   await assert.rejects(asUser(A, 'select * from public.mail_connections'));
   assert.equal(await asUser(B, 'select count(email) from public.mail_connections'), '0');
+});
+
+test('reprise : une tentative jamais envoyée peut reprendre ; après le début de l’envoi, plus jamais', { skip }, async () => {
+  const reserve = (offer: string) =>
+    sql(`select coalesce(attempt_id::text, reason) from public.reserve_application_attempt('${B}', '${offer}', 'email', 'rh@exemple.fr', 'v1', '[]', '{}')`);
+  await sql(`insert into public.automation_policies (user_id, enabled, daily_limit) values ('${B}', true, 10)`);
+  const id = await reserve('offre-20');
+  assert.equal(await sql(`select public.record_submission('${id}', 'needs_user', null, 'Messagerie à reconnecter')`), 't');
+  assert.equal(await reserve('offre-20'), id, 'même tentative reprise');
+  assert.equal(await sql(`select public.begin_submission('${id}')`), 'OK');
+  assert.equal(await sql(`select public.record_submission('${id}', 'uncertain', null, 'délai dépassé')`), 't');
+  assert.equal(await reserve('offre-20'), 'ALREADY_ATTEMPTED');
+  // Transitions interdites : un envoi incertain ne redevient pas « réservé » ni « échoué »
+  assert.equal(await sql(`select public.record_submission('${id}', 'failed')`), 'f');
+  assert.equal(await sql(`select public.record_submission('${id}', 'confirmed', '{"messageId":"m1"}')`), 't');
+  assert.equal(await sql(`select status || ':' || (proof->>'messageId') from public.application_attempts where id = '${id}'`), 'confirmed:m1');
 });
