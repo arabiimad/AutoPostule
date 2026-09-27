@@ -27,6 +27,7 @@ npm start                 # sert dist/ ; port = variable PORT (3000 par défaut)
 | `npm run build` / `npm start` | Construction puis lancement en production |
 | `npm run lint` | Vérification des types TypeScript |
 | `npm test` | Tests unitaires (sources, fusion des doublons, score, LaTeX, statistiques, import Word…) |
+| `npm run test:firestore` | Stockage Firestore de l'agent contre l'émulateur (Java requis) |
 | `npm run test:e2e` | Parcours complet dans un vrai navigateur, sources simulées (après `npm run build` et `npx playwright install chromium`) |
 | `npm run check:sources -- "développeur web" Lyon alternance` | Teste vos vraies clés d'API : offres par source, erreurs, avertissements |
 | `npm run check:ai` | Teste la clé Gemini (modèles accessibles) et la génération d'un CV d'exemple |
@@ -77,6 +78,22 @@ Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accè
 | `PORT` | Port d'écoute |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Facultatif : cache, limite de débit et quotas partagés entre plusieurs serveurs (Redis Upstash) |
 | `LATEX_COMPILER` | `tectonic`, `pdflatex` ou `off` pour le bouton « Télécharger le PDF » |
+
+## Agent de candidature automatique
+
+L'agent postule depuis le serveur, même quand le PC de l'utilisateur est éteint. Code : `server/automation/`.
+
+1. **File de tâches** (`store.ts`, `firestoreStore.ts`) : une tâche par candidature, une seule par offre. Chaque tâche est réservée pour une durée limitée ; si un serveur plante, un autre la reprend. Les erreurs passagères sont retentées (5 min, 30 min, 2 h).
+2. **Orchestrateur** (`orchestrator.ts`) : garde-fous → CV et lettre (préparés une seule fois) → validation si nécessaire → canal d'envoi → suivi.
+3. **Canaux** (`channels.ts`), essayés dans l'ordre : email au recruteur (boîte de l'utilisateur, simulée pour l'instant), puis étape manuelle (dossier prêt, l'utilisateur termine l'envoi). Les canaux La bonne alternance, formulaires et agent navigateur viendront s'ajouter à cette liste.
+4. **Pause et reprise** : quand l'agent a besoin de l'utilisateur (validation, question inconnue, captcha, code SMS), la candidature est mise de côté et une notification groupée part sur son téléphone (« 3 candidatures attendent un tap »). Un code de vérification est signalé tout de suite. La réponse remet la candidature en file.
+5. **Garde-fous** (`guardrails.ts`) : plafond d'envois sur 24 h, une candidature par entreprise pendant 30 jours, entreprises exclues, score minimum pour les offres trouvées par l'agent. Niveaux : `manual` (chaque envoi validé), `rules` (automatique), `progressive` (défaut : automatique après 10 validations sans correction ; un refus remet le compteur à zéro).
+6. **Base de réponses** (`answers.ts`) : réponse enregistrée (même formulée autrement) → profil → IA avec un niveau de confiance ≥ 0,8. L'IA ne répond jamais aux questions de salaire, d'autorisation de travail, de disponibilité, de mobilité, de handicap ou d'ordre juridique : seul l'utilisateur y répond, une fois, et sa réponse resservira sur tous les sites.
+7. **Coffre** (`vault.ts`) : identifiants créés sur les sites carrière, mot de passe fort par site, chiffrés en AES-256-GCM (`VAULT_KEY`), jamais renvoyés dans les listes.
+
+API (`/api/automation`, compte connecté requis) : `POST /applications`, `GET /tasks?status=waiting_user`, `POST /tasks/:id/resolve` (`approve` avec lettre corrigée possible, `reject`, `answer`, `code`, `done`), `POST /tasks/:id/cancel`, `GET|PUT /settings`, `GET|PUT|DELETE /answers`, `GET /vault`, `POST /vault/:id/reveal`, `POST|DELETE /devices`, `GET /status`.
+
+Production (Cloud Run) : `AUTOMATION_STORE=firestore`, `VAULT_KEY`, `AUTOMATION_CRON_SECRET`, `APP_URL`, et une tâche Cloud Scheduler qui appelle `POST /api/automation/tick` chaque minute avec l'en-tête `x-automation-secret`. Voir `.env.example`.
 
 ## Fonctionnalités
 

@@ -30,6 +30,8 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Agent de candidature (automation_tasks, users/{uid}/vault, answers, submissions, devices…) :
+    // accès réservé au serveur (firebase-admin). Le navigateur passe par /api/automation.
     match /{document=**} {
       allow read, write: if false;
     }

@@ -15,6 +15,7 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "check:sources": "node --import tsx scripts/check-sources.ts",
     "test:e2e": "node e2e/run.mjs",
+    "test:firestore": "node node_modules/firebase-tools/lib/bin/firebase.js emulators:exec --only firestore --project demo-autopostule \"node --import tsx --test tests/automationFirestore.test.ts\"",
     "check:ai": "node --import tsx scripts/check-ai.ts"
   },
   "dependencies": {

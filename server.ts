@@ -12,6 +12,10 @@ import { authMiddleware, getAuthMode } from "./server/auth.ts";
 import { extractTextFromDocx } from "./server/docx.ts";
 import { kv, countApiCall, getQuotaUsage } from "./server/store.ts";
 import { createHash } from "node:crypto";
+import { createAutomation } from "./server/automation/index.ts";
+import { createAutomationRouter } from "./server/automation/routes.ts";
+import type { AiAnswerFn } from "./server/automation/answers.ts";
+import type { PreparedDocuments } from "./server/automation/types.ts";
 import {
   analyzeOffer, tailorCv, applyTailored, sanitizeTailored, rewriteText, fallbackOfferAnalysis, defaultTailored,
   type GenerateFn, type OfferAnalysis
@@ -308,6 +312,57 @@ async function cachedOfferAnalysis(generate: GenerateFn | null, job: any): Promi
   return analysis;
 }
 
+/**
+ * Lettre de motivation adaptée à l'offre (utilisée par l'interface et par l'agent de candidature).
+ * Sans IA disponible : lettre modèle à personnaliser.
+ */
+async function generateCoverLetter(candidate: any, job: any, providedAnalysis?: any): Promise<{ letter: string; source: "gemini-ai" | "standard-template"; notice?: string }> {
+  const fallback = (notice: string) => ({ source: "standard-template" as const, notice, letter: generateFallbackLetter(candidate, job) });
+  const ai = getGeminiClient();
+  if (!ai) return fallback("Service IA indisponible : lettre modèle à personnaliser.");
+
+  try {
+    const { generate } = makeGenerate(ai);
+    // Même analyse que le CV (en cache) : lettre et CV mettent en avant les mêmes points
+    const analysis = providedAnalysis && typeof providedAnalysis === "object" ? providedAnalysis : await cachedOfferAnalysis(generate, job);
+    const prompt = `Rédige une lettre de motivation en français, sur mesure, pour :
+
+PROFIL DU CANDIDAT :
+${candidateBrief(candidate)}
+
+${job?.isSpontaneous
+? `CANDIDATURE SPONTANÉE (aucune offre publiée) :
+Entreprise : ${job?.company || ""}
+Secteur : ${job?.companySector || "non précisé"}
+Effectif : ${job?.companySize || "non précisé"}
+Contrat recherché : alternance
+Métier visé : ${String(job?.title || "").replace(/^Candidature spontanée — /, "")}
+Écris une lettre de candidature spontanée : explique pourquoi cette entreprise et ce secteur, ce que le candidat peut apporter, et propose un échange. N'invente aucune information sur l'entreprise.`
+: `OFFRE CIBLÉE :
+Intitulé : ${job?.title || ""}
+Entreprise : ${job?.company || ""}
+Description : ${job?.description || ""}
+Mots-clés recherchés : ${(job?.skillsRequired || []).join(", ")}`}
+
+ANALYSE DE L'OFFRE : ${JSON.stringify(analysis)}
+
+DIRECTIVES :
+- Registre : ${analysis?.tone || "professionnel"} ; reprends le vocabulaire de l'offre quand il décrit fidèlement le parcours du candidat.
+- Structure : accroche liée à l'entreprise ou au poste, 2 paragraphes reliant des expériences réelles aux missions/exigences, conclusion avec proposition d'échange.
+- N'invente rien d'absent du profil (expériences, chiffres, diplômes, niveaux).
+- Relie concrètement les vraies expériences du candidat aux besoins de ${job?.company || "l'entreprise"}.
+- Ton direct, professionnel, sans formules creuses. 250 à 350 mots.
+- Renvoie UNIQUEMENT le texte de la lettre (de « Madame, Monsieur, » à la signature), sans titre, sans commentaire, sans markdown.`;
+
+    const response = await callGeminiResilient(ai, { preferredModel: MODEL_BEST, contents: prompt });
+    const letter = (response.text || "").replace(/^```[a-z]*\n?|```$/g, "").trim();
+    if (letter.length > 100) return { source: "gemini-ai", letter };
+    return fallback("Réponse IA vide : lettre modèle à personnaliser.");
+  } catch (e: any) {
+    return fallback(isRateLimitOrQuotaError(e) ? "Quota IA atteint : lettre modèle à personnaliser." : "Service IA en erreur : lettre modèle à personnaliser.");
+  }
+}
+
 function candidateBrief(candidate: any): string {
   const exps = (candidate?.experiences || []).map((e: any) => ({ poste: e.title, entreprise: e.company, periode: [e.startDate, e.endDate].filter(Boolean).join(" - "), realisations: e.bullets }));
   const edu = (candidate?.education || []).map((ed: any) => ({ diplome: ed.degree, etablissement: ed.institution, annee: ed.year }));
@@ -325,6 +380,60 @@ function stableJobId(company: any, title: any, location: any): string {
   for (let i = 0; i < key.length; i++) h = ((h << 5) + h + key.charCodeAt(i)) >>> 0;
   return `live-${h.toString(36)}`;
 }
+
+/**
+ * Dossier complet pour l'agent de candidature : CV adapté (LaTeX + PDF si un compilateur est présent) et lettre.
+ * Même chaîne que l'interface : aucune donnée hors du profil n'est ajoutée.
+ */
+async function prepareApplicationDocuments(candidate: any, job: any): Promise<PreparedDocuments> {
+  if (!hasItems(candidate?.experiences)) throw new Error("Profil incomplet : ajoutez au moins une expérience pour que l'agent puisse postuler.");
+  const ai = getGeminiClient();
+  const gen = ai ? makeGenerate(ai) : null;
+  const analysis = await cachedOfferAnalysis(gen?.generate || null, job);
+  const result = await tailorCv(gen?.generate || null, candidate, job, analysis);
+  const latexCode = generateFallbackLatex(applyTailored(candidate, result.tailored), job, normalizeTemplate(candidate?.preferredTemplate), { tailored: true });
+  const letter = await generateCoverLetter(candidate, job, analysis);
+  const compiled = await compileLatex(latexCode);
+
+  const notices: string[] = [];
+  if (result.source !== "ai") notices.push("CV construit à partir du profil, sans reformulation IA.");
+  if (result.rejected.length) notices.push(`${result.rejected.length} proposition(s) de l'IA écartée(s) car absentes du profil.`);
+  if (letter.notice) notices.push(letter.notice);
+  if (!compiled.pdf) notices.push(compiled.error === "NO_COMPILER" ? "Compilateur LaTeX absent : pas de PDF, l'envoi par email est impossible." : `PDF non généré : ${compiled.error}`);
+  return {
+    coverLetter: letter.letter,
+    latexCode,
+    ...(compiled.pdf ? { cvPdfBase64: compiled.pdf.toString("base64") } : {}),
+    notices,
+    preparedAt: new Date().toISOString()
+  };
+}
+
+/**
+ * Réponse de l'IA à une question de formulaire, uniquement à partir du profil, avec un niveau de confiance.
+ * Les catégories sensibles (salaire, droit au travail…) ne passent jamais par ici (voir answers.ts).
+ */
+const answerFormQuestion: AiAnswerFn = async (q, profile, job) => {
+  const ai = getGeminiClient();
+  if (!ai) return null;
+  const prompt = `Tu remplis un formulaire de candidature pour le candidat ci-dessous.
+Réponds à la question UNIQUEMENT avec des faits présents dans le profil. N'invente rien.
+Si le profil ne permet pas de répondre avec certitude, renvoie "confidence": 0.
+
+PROFIL :
+${candidateBrief(profile)}
+
+OFFRE : ${job?.title || ""} chez ${job?.company || ""}
+
+QUESTION : ${q.label}
+${q.options?.length ? `CHOIX POSSIBLES (réponds avec l'un d'eux, à l'identique) : ${JSON.stringify(q.options)}` : "Réponse libre : concise, en français, 80 mots maximum."}
+
+Renvoie uniquement ce JSON : {"answer": "...", "confidence": 0.0 à 1.0}`;
+  const r = await callGeminiResilient(ai, { preferredModel: MODEL_FAST, contents: prompt, config: { responseMimeType: "application/json", temperature: 0 } });
+  const parsed = extractJsonObject(r.text || "");
+  if (!parsed || typeof parsed.answer !== "string") return null;
+  return { answer: parsed.answer.trim(), confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0)) };
+};
 
 const SUPPORTED_AI_MIME = /^(application\/pdf|image\/(png|jpeg|webp))$/i;
 
@@ -347,6 +456,16 @@ async function startServer() {
   app.use("/api/jobs", createRateLimiter("jobs", 40, 60_000));
   app.use("/api/client-errors", createRateLimiter("errors", 20, 60_000));
 
+  // Agent de candidature automatique (file de tâches, validations, coffre, base de réponses)
+  const automation = await createAutomation({ prepare: prepareApplicationDocuments, ai: answerFormQuestion, log: logEvent });
+  const automationAuth = authMiddleware();
+  app.use("/api/automation", (req: any, res: any, next: any) => (req.path === "/tick" ? next() : automationAuth(req, res, next)));
+  app.use("/api/automation", createRateLimiter("automation", 120, 60_000));
+  app.use("/api/automation", createAutomationRouter(automation, {
+    authMode: getAuthMode(),
+    production: process.env.NODE_ENV === "production" || /server\.cjs$/.test(process.argv[1] || "")
+  }));
+
   // Erreurs JavaScript remontées par le navigateur (suivi d'erreurs sans service tiers)
   app.post("/api/client-errors", (req, res) => {
     const b = req.body || {};
@@ -367,6 +486,7 @@ async function startServer() {
       authMode: getAuthMode(),
       jobSources: getSourceStatus(),
       storage: kv().kind,
+      automation: automation.config,
       latexCompiler: !!(await detectLatexCompiler())
     });
   });
@@ -744,53 +864,7 @@ Renvoie UNIQUEMENT un tableau JSON valide (sans backticks markdown si possible, 
   // 4. Lettre de motivation
   app.post("/api/tailor/letter", async (req, res) => {
     const { candidate, job } = req.body || {};
-    const fallback = (reason: string) => res.json({ source: "standard-template", notice: reason, letter: generateFallbackLetter(candidate, job) });
-
-    const ai = getGeminiClient();
-    if (!ai) return fallback("Service IA indisponible : lettre modèle à personnaliser.");
-
-    try {
-      const { generate } = makeGenerate(ai);
-      // Même analyse que le CV (en cache) : lettre et CV mettent en avant les mêmes points
-      const analysis = req.body?.analysis && typeof req.body.analysis === "object" ? req.body.analysis : await cachedOfferAnalysis(generate, job);
-      const prompt = `Rédige une lettre de motivation en français, sur mesure, pour :
-
-PROFIL DU CANDIDAT :
-${candidateBrief(candidate)}
-
-${job?.isSpontaneous
-  ? `CANDIDATURE SPONTANÉE (aucune offre publiée) :
-Entreprise : ${job?.company || ""}
-Secteur : ${job?.companySector || "non précisé"}
-Effectif : ${job?.companySize || "non précisé"}
-Contrat recherché : alternance
-Métier visé : ${String(job?.title || "").replace(/^Candidature spontanée — /, "")}
-Écris une lettre de candidature spontanée : explique pourquoi cette entreprise et ce secteur, ce que le candidat peut apporter, et propose un échange. N'invente aucune information sur l'entreprise.`
-  : `OFFRE CIBLÉE :
-Intitulé : ${job?.title || ""}
-Entreprise : ${job?.company || ""}
-Description : ${job?.description || ""}
-Mots-clés recherchés : ${(job?.skillsRequired || []).join(", ")}`}
-
-ANALYSE DE L'OFFRE : ${JSON.stringify(analysis)}
-
-DIRECTIVES :
-- Registre : ${analysis?.tone || "professionnel"} ; reprends le vocabulaire de l'offre quand il décrit fidèlement le parcours du candidat.
-- Structure : accroche liée à l'entreprise ou au poste, 2 paragraphes reliant des expériences réelles aux missions/exigences, conclusion avec proposition d'échange.
-- N'invente rien d'absent du profil (expériences, chiffres, diplômes, niveaux).
-- Relie concrètement les vraies expériences du candidat aux besoins de ${job?.company || "l'entreprise"}.
-- Ton direct, professionnel, sans formules creuses. 250 à 350 mots.
-- Renvoie UNIQUEMENT le texte de la lettre (de « Madame, Monsieur, » à la signature), sans titre, sans commentaire, sans markdown.`;
-
-      const response = await callGeminiResilient(ai, { preferredModel: MODEL_BEST, contents: prompt });
-      const letter = (response.text || "").replace(/^```[a-z]*\n?|```$/g, "").trim();
-      if (letter.length > 100) {
-        return res.json({ source: "gemini-ai", letter });
-      }
-      return fallback("Réponse IA vide : lettre modèle à personnaliser.");
-    } catch (e: any) {
-      return fallback(isRateLimitOrQuotaError(e) ? "Quota IA atteint : lettre modèle à personnaliser." : "Service IA en erreur : lettre modèle à personnaliser.");
-    }
+    return res.json(await generateCoverLetter(candidate, job, req.body?.analysis));
   });
 
   // 4 bis. Email de relance
