@@ -495,10 +495,21 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
     }
   }
 
-  // Smart neutral fallback: use first short non-contact line or neutral universal title
+  // Métier absent de la liste (tous les métiers, formes féminines : « Développeuse web », « Aide-soignante »…) :
+  // ligne courte de l'en-tête qui n'est ni le nom, ni un contact, ni un titre de section — en priorité celle qui suit le nom
   if (!title) {
-    const candidateLine = headerLines.find(l => l.length >= 4 && l.length <= 50 && !l.match(/@|\.com|\.fr|\+33|\d{5}/));
-    title = candidateLine || '';
+    const norm = (v: string) => v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const isTitleLike = (l: string) =>
+      l.length >= 4 && l.length <= 60 &&
+      !l.match(/@|https?:|www\.|\.com|\.fr|\+33|\d{5}|\d{2}[ .]?\d{2}[ .]?\d{2}[ .]?\d{2}|\b(19|20)\d{2}\b/) &&
+      (!fullName || norm(l) !== norm(fullName)) &&
+      !/^(exp[ée]riences?|formations?|comp[ée]tences|langues|profil|contact|coordonn[ée]es|centres? d.int[ée]r[êe]ts?|curriculum vitae|cv)\b/i.test(l.trim());
+    const nameIdx = fullName ? headerLines.findIndex(l => norm(l) === norm(fullName)) : -1;
+    // Seulement l'en-tête, avant la première section (sinon un intitulé d'expérience devenait le titre)
+    const firstSection = headerLines.findIndex(l => /^(exp[ée]riences?|formations?|comp[ée]tences|parcours)\b/i.test(l.trim()));
+    const header = firstSection >= 0 ? headerLines.slice(0, firstSection) : headerLines;
+    const afterName = nameIdx >= 0 ? header.slice(nameIdx + 1).find(isTitleLike) : undefined;
+    title = afterName || header.find(isTitleLike) || '';
   }
 
   // 3.5 Section Slicing

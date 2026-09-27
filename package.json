@@ -19,6 +19,8 @@
     "test:e2e:worker": "node --import tsx e2e/worker.e2e.ts",
     "test:e2e:automation": "node --import tsx e2e/automation-ui.e2e.ts",
     "test:e2e:accounts": "node e2e/local-supabase.mjs",
+    "ingest:ft": "node --import tsx scripts/ingest.ts",
+    "measure:channels": "node --import tsx scripts/measure-channels.ts",
     "check:ai": "node --import tsx scripts/check-ai.ts",
     "test:supabase": "node e2e/supabase-live.mjs"
   },
