@@ -2,6 +2,7 @@
  * Canal de candidature d'une offre, déterminé par le serveur (jamais par le modèle d'IA) :
  * - email : adresse publiée DANS l'offre pour recevoir les candidatures ;
  * - lever / greenhouse : formulaire hébergé par ces logiciels de recrutement ;
+ * - lba : offre ou entreprise de La bonne alternance acceptant les candidatures par leur API officielle ;
  * - platform : LinkedIn, Indeed, Welcome to the Jungle… dont les conditions interdisent l'envoi automatisé
  *   → validation manuelle par le candidat (dossier prêt, notification) ;
  * - unknown : site carrières non reconnu → validation manuelle.
@@ -11,6 +12,7 @@ export type ApplyChannel =
   | { kind: "email"; target: string; evidence: string }
   | { kind: "lever"; target: string; site: string; postingId: string }
   | { kind: "greenhouse"; target: string; board: string; jobId: string }
+  | { kind: "lba"; target: string; recipientId: string }
   | { kind: "platform"; target: string; platform: string }
   | { kind: "unknown"; target: string };
 
@@ -92,12 +94,24 @@ export function parseAtsUrl(url: string): ApplyChannel | null {
  * Canal d'une offre. Priorité : formulaire reconnu (Lever, Greenhouse) parmi les liens de candidature,
  * puis adresse de candidature publiée dans l'offre, puis plateforme (validation manuelle).
  */
-export function resolveApplyChannel(offer: { applyUrl?: string; url?: string; description?: string; applyOptions?: { url?: string; apply_link?: string }[] }): ApplyChannel {
+export function resolveApplyChannel(offer: {
+  applyUrl?: string; url?: string; description?: string; applyOptions?: { url?: string; apply_link?: string }[];
+  contactEmail?: string; lbaRecipientId?: string; source?: string;
+}): ApplyChannel {
   const links = [offer.applyUrl, offer.url, ...(offer.applyOptions || []).map((o) => o?.url || o?.apply_link)]
     .filter((l): l is string => typeof l === "string" && /^(https?:\/\/|mailto:)/i.test(l));
   for (const l of links) {
     const ats = parseAtsUrl(l);
     if (ats) return ats;
+  }
+  // API officielle de La bonne alternance (la candidature est transmise au recruteur)
+  if (offer.lbaRecipientId) {
+    return { kind: "lba", recipientId: String(offer.lbaRecipientId), target: offer.applyUrl || "https://labonnealternance.apprentissage.beta.gouv.fr/" };
+  }
+  // Adresse de candidature fournie par la source comme champ de l'offre (France Travail : contact.courriel)
+  const contact = String(offer.contactEmail || "").trim().toLowerCase();
+  if (/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/.test(contact) && !NEVER_LOCAL.test(contact.split("@")[0])) {
+    return { kind: "email", target: contact, evidence: `Adresse de candidature indiquée dans l'offre (${offer.source || "source"}).` };
   }
   for (const l of links) {
     if (/^mailto:/i.test(l)) {
@@ -117,5 +131,7 @@ export function resolveApplyChannel(offer: { applyUrl?: string; url?: string; de
 export function isAutomatable(channel: ApplyChannel, allowed: string[]): boolean {
   if (channel.kind === "email") return allowed.includes("email");
   if (channel.kind === "lever" || channel.kind === "greenhouse") return allowed.includes("form");
+  // La bonne alternance transmet la candidature par email au recruteur : même autorisation que l'email
+  if (channel.kind === "lba") return allowed.includes("email");
   return false;
 }

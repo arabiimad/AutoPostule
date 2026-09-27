@@ -102,6 +102,19 @@ Activer le paiement (Stripe) :
 3. Webhook (Développeurs → Webhooks) vers `https://votre-domaine/api/billing/webhook`, évènements `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted` : `STRIPE_WEBHOOK_SECRET=whsec_…`. En local : `stripe listen --forward-to localhost:3000/api/billing/webhook`.
 4. Portail client (Paramètres → Billing → Customer portal) : activez la résiliation et la mise à jour de la carte.
 
+## Découverte d'offres et envoi La bonne alternance (auto-candidature)
+
+La recherche planifiée du worker ne se limite pas aux sites d'emploi (`server/discovery/`) :
+
+- **Pages carrière des entreprises** (Greenhouse, Lever, Ashby, SmartRecruiters) : chaque lien vers l'une d'elles rencontré dans une recherche enregistre la page (liste partagée, Redis si configuré), relue ensuite pour tous les candidats. Seules les offres dont l'intitulé contient tous les mots du métier recherché sont gardées. Les offres Lever et Greenhouse partent ensuite par le formulaire déjà pris en charge.
+- **Publications « on recrute »** (LinkedIn, sites d'entreprises…) via la recherche Google de Gemini : lecture des résultats publics seulement, sans connexion à LinkedIn. Une offre n'est gardée que si son lien fait partie des pages réellement consultées par la recherche : un lien inventé est écarté. L'adresse de candidature citée dans la publication est reprise.
+- **France uniquement** dans cette version (`regions.ts`, prévu pour ajouter d'autres pays).
+- **Tous les métiers** : une offre dont les compétences ne sont pas reconnues par le catalogue n'est plus écartée si son intitulé correspond au métier recherché ; le dossier est préparé et **validé par le candidat** (jamais d'envoi automatique à l'aveugle).
+
+Canaux d'envoi ajoutés :
+- **La bonne alternance** : API officielle `POST /job/v1/apply` (migration `004_lba_channel.sql`). Mêmes garanties que l'email : réservation, pause revérifiée, preuve, résultat incertain jamais renvoyé.
+- **Adresse de candidature France Travail** (`contact.courriel` de l'offre) : envoi par email depuis la boîte du candidat.
+
 ## Mise en production
 
 - **Docker** : `docker build -t autopostule --build-arg VITE_SUPABASE_URL=… --build-arg VITE_SUPABASE_ANON_KEY=… .` puis `docker run -p 3000:3000 --env-file .env autopostule` (Chromium inclus pour les PDF). Compatible Render, Railway, Fly.io, Cloud Run, Scaleway.

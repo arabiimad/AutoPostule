@@ -26,6 +26,11 @@ export interface Qualification {
   /** Motif lisible si l'offre est écartée. */
   reason?: string;
   score: number | null;
+  /**
+   * Offre retenue mais à faire valider par le candidat (jamais d'envoi automatique) : par exemple un métier
+   * dont les compétences ne figurent pas dans le catalogue (aide-soignant, chauffeur, boulanger…).
+   */
+  review?: string;
 }
 
 const norm = (s: unknown) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -67,16 +72,20 @@ export function qualifyOffer(policy: AutomationPolicy, profile: any, offer: any,
     const floor = annualSalaryFloor(offer?.salary);
     if (floor !== null && floor < policy.minSalary) return no("Salaire inférieur à votre minimum.");
   }
-  if (policy.roles.length) {
-    const t = new Set(words(offer?.title || ""));
-    const fits = policy.roles.some((r) => {
-      const w = words(r);
-      return w.length > 0 && w.every((x) => t.has(x) || [...t].some((y) => y.startsWith(x) || x.startsWith(y)));
-    });
-    if (!fits) return no("Intitulé sans rapport avec les métiers recherchés.");
-  }
+  const t = new Set(words(offer?.title || ""));
+  const fitsTitle = (roles: string[]) => roles.some((r) => {
+    const w = words(r);
+    return w.length > 0 && w.every((x) => t.has(x) || [...t].some((y) => y.startsWith(x) || x.startsWith(y)));
+  });
+  if (policy.roles.length && !fitsTitle(policy.roles)) return no("Intitulé sans rapport avec les métiers recherchés.");
   if (isFarFromProfile(profile, offer)) return no("Poste éloigné de votre parcours.");
-  if (score === null) return no("Compétences de l'offre non détectées : adéquation non évaluable.");
+  if (score === null) {
+    // Tous les métiers : sans compétences reconnues, l'intitulé doit correspondre au métier recherché,
+    // et l'envoi passe par la validation du candidat
+    const roles = policy.roles.length ? policy.roles : [...(profile?.targetRoles || []), profile?.title].filter(Boolean).map(String);
+    if (!fitsTitle(roles)) return no("Compétences de l'offre non détectées : adéquation non évaluable.");
+    return { ok: true, score: null, review: "Adéquation non évaluable automatiquement (compétences de l'offre non reconnues) : vérifiez l'offre avant l'envoi." };
+  }
   if (score < policy.minFit) return no(`Adéquation ${score} % inférieure à votre seuil de ${policy.minFit} %.`);
   return { ok: true, score };
 }

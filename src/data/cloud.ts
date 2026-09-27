@@ -12,6 +12,8 @@
  */
 import { createClient, type SupabaseClient, type User as SbUser } from '@supabase/supabase-js';
 import type { Application, UserProfile } from '../types';
+import { recoveryStateFromHash, type RecoveryState } from '../utils/passwordReset';
+export type { RecoveryState };
 
 export interface AppUser {
   uid: string;
@@ -30,13 +32,55 @@ export const accountsRequired = cloudEnabled;
 /** Connexion Google : à activer dans Supabase (Authentication → Providers) puis VITE_AUTH_GOOGLE=on. */
 export const googleAuthEnabled = cloudEnabled && import.meta.env.VITE_AUTH_GOOGLE === 'on';
 
+// ---------------------------------------------------------------------------
+// Lien « mot de passe oublié » : l'adresse est lue au chargement, avant que le client Supabase ne la nettoie.
+//   #access_token=…&type=recovery        → choisir un nouveau mot de passe
+//   #error=access_denied&error_code=otp_expired… → lien expiré ou déjà utilisé
+// ---------------------------------------------------------------------------
+let recoveryState: RecoveryState | null = typeof window !== 'undefined' ? recoveryStateFromHash(window.location.hash) : null;
+const recoveryListeners = new Set<(state: RecoveryState) => void>();
+function setRecovery(state: RecoveryState | null) {
+  recoveryState = state;
+  if (state) for (const cb of recoveryListeners) cb(state);
+}
+
 let client: SupabaseClient | null = null;
 function sb(): SupabaseClient {
   if (!cloudEnabled) throw new Error('CLOUD_DISABLED');
-  client ||= createClient(url!, key!, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
-  });
+  if (!client) {
+    client = createClient(url!, key!, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
+    // Écoute posée dès la création du client : l'évènement est émis juste après la lecture du lien
+    client.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovery('pending');
+    });
+  }
   return client;
+}
+
+/** Arrivée par un lien de réinitialisation (ou lien expiré) : appelle `cb` pour afficher le formulaire. */
+export function onPasswordRecovery(cb: (state: RecoveryState) => void): () => void {
+  if (!cloudEnabled) return () => {};
+  sb();
+  recoveryListeners.add(cb);
+  if (recoveryState) cb(recoveryState);
+  return () => { recoveryListeners.delete(cb); };
+}
+
+/** Enregistre le nouveau mot de passe (session ouverte par le lien de réinitialisation). */
+export async function updatePassword(password: string): Promise<void> {
+  const { error } = await sb().auth.updateUser({ password });
+  if (error) throw error;
+  recoveryState = null;
+  if (typeof window !== 'undefined' && window.location.hash) {
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+  }
+}
+
+/** Formulaire fermé sans changer le mot de passe. */
+export function dismissPasswordRecovery() {
+  recoveryState = null;
 }
 
 const toAppUser = (u: SbUser): AppUser => ({
@@ -117,6 +161,8 @@ export function authErrorMessage(err: any): string {
   if (code === 'user_already_exists' || /already registered/i.test(msg)) return 'Un compte existe déjà avec cette adresse e-mail. Connectez-vous.';
   if (code === 'invalid_credentials' || /invalid login credentials/i.test(msg)) return 'E-mail ou mot de passe incorrect.';
   if (code === 'email_not_confirmed' || /email not confirmed/i.test(msg)) return 'Adresse e-mail non confirmée : cliquez sur le lien reçu par e-mail (pensez aux indésirables).';
+  if (code === 'same_password' || /different from the old password/i.test(msg)) return 'Choisissez un mot de passe différent de l’ancien.';
+  if (code === 'session_not_found' || code === 'session_expired' || /auth session missing/i.test(msg)) return 'Le lien de réinitialisation a expiré : demandez-en un nouveau.';
   if (code === 'weak_password' || /password should be/i.test(msg)) return 'Mot de passe trop faible : 8 caractères minimum, avec lettres et chiffres.';
   if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit' || /rate limit/i.test(msg)) return 'Trop de tentatives : patientez quelques minutes avant de réessayer.';
   if (code === 'validation_failed' || /invalid.*email|email.*invalid/i.test(msg)) return 'Adresse e-mail invalide.';
