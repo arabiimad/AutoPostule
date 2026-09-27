@@ -316,7 +316,7 @@ export async function reviewTailored(
   generate: GenerateFn,
   candidate: any,
   tailored: TailoredCv
-): Promise<{ tailored: TailoredCv; rejected: ValidationResult["rejected"] }> {
+): Promise<{ tailored: TailoredCv; rejected: ValidationResult["rejected"]; reviewed: boolean }> {
   const exps: any[] = Array.isArray(candidate?.experiences) ? candidate.experiences : [];
   const byId = new Map(exps.map((e, i) => [experienceId(e, i), e]));
   const pairs: { ref: string; sources: string[]; proposal: string }[] = [];
@@ -326,11 +326,11 @@ export async function reviewTailored(
       if (!original.includes(b)) pairs.push({ ref: `${ei}:${bi}`, sources: original, proposal: b });
     });
   });
-  if (!pairs.length) return { tailored, rejected: [] };
+  if (!pairs.length) return { tailored, rejected: [], reviewed: true };
 
   const raw = parseJson(await generate(buildReviewPrompt(pairs), { quality: "fast", json: true }));
   // Relecture illisible : on garde le résultat des garde-fous déterministes plutôt que de tout annuler
-  if (!raw || !Array.isArray(raw.approved)) return { tailored, rejected: [] };
+  if (!raw || !Array.isArray(raw.approved)) return { tailored, rejected: [], reviewed: false };
   const approved = new Set(raw.approved.map(String));
   const rejected: ValidationResult["rejected"] = [];
   const experiences = tailored.experiences.map((t, ei) => {
@@ -345,7 +345,7 @@ export async function reviewTailored(
       .filter((b): b is string => !!b);
     return { ...t, bullets: Array.from(new Set(bullets)) };
   });
-  return { tailored: { ...tailored, experiences }, rejected };
+  return { tailored: { ...tailored, experiences }, rejected, reviewed: true };
 }
 
 export async function tailorCv(
@@ -354,8 +354,9 @@ export async function tailorCv(
   job: any,
   analysis: OfferAnalysis,
   options: { review?: boolean } = {}
-): Promise<{ tailored: TailoredCv; rejected: ValidationResult["rejected"]; source: "ai" | "profile"; error?: string }> {
-  if (!generate) return { tailored: defaultTailored(candidate, job), rejected: [], source: "profile" };
+): Promise<{ tailored: TailoredCv; rejected: ValidationResult["rejected"]; source: "ai" | "profile"; error?: string; reviewed: boolean }> {
+  // reviewed : relecture sémantique effectuée (condition d'un envoi sans intervention quand l'IA a reformulé)
+  if (!generate) return { tailored: defaultTailored(candidate, job), rejected: [], source: "profile", reviewed: false };
   try {
     const text = await generate(buildTailorPrompt(candidate, job, analysis), { quality: "best", json: true });
     const raw = parseJson(text);
@@ -363,18 +364,20 @@ export async function tailorCv(
     const validated = validateTailored(candidate, job, raw, analysis);
     let { tailored } = validated;
     const rejected = [...validated.rejected];
+    let reviewed = false;
     if (options.review !== false) {
       try {
-        const reviewed = await reviewTailored(generate, candidate, tailored);
-        tailored = reviewed.tailored;
-        rejected.push(...reviewed.rejected);
+        const review = await reviewTailored(generate, candidate, tailored);
+        tailored = review.tailored;
+        rejected.push(...review.rejected);
+        reviewed = review.reviewed;
       } catch {
         /* relecture indisponible : garde-fous déterministes seuls */
       }
     }
-    return { tailored, rejected, source: "ai" };
+    return { tailored, rejected, source: "ai", reviewed };
   } catch (e: any) {
-    return { tailored: defaultTailored(candidate, job), rejected: [], source: "profile", error: String(e?.message || e) };
+    return { tailored: defaultTailored(candidate, job), rejected: [], source: "profile", error: String(e?.message || e), reviewed: false };
   }
 }
 
