@@ -15,6 +15,7 @@ Application commerciale (freemium) d'aide à la recherche d'emploi et d'alternan
 ## Commandes
 - `npm run dev` · `npm run lint` (types) · `npm test` (unitaires) · `npm run build`
 - `npm run test:e2e` (parcours complet, sources et IA simulées ; après build)
+- `AUTOMATION_PG="-h <hôte> -p <port> -U postgres" npm test` : migrations et file de tâches de l'auto-candidature testées sur un vrai PostgreSQL (ignorés sans cette variable)
 - `npm run test:supabase` (test réel contre Supabase, comptes de test créés puis supprimés)
 - `npm run check:sources` / `npm run check:ai` : vérifications réelles des sources et de l'IA (réseau, clés)
 - Chromium : `PW_CHROMIUM_PATH` si Playwright ne trouve pas son navigateur
