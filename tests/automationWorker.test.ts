@@ -159,3 +159,73 @@ test('recherche planifiée : offres qualifiées ajoutées une seule fois', async
   await runOnce(s.deps, { limit: 1 });
   assert.deepEqual(s.store.tasks.filter(t => t.kind === 'process_offer').map(t => t.offerId), ['s1']);
 });
+
+// ---------------------------------------------------------------------------
+// Formulaires Lever / Greenhouse
+// ---------------------------------------------------------------------------
+const leverOffer = (id: string) => offer(id, { description: 'Postulez en ligne.', applyUrl: `https://jobs.lever.co/acme/0b5c3a9e-1111-4a2b-9c3d-${id.padStart(12, '0')}` });
+function withForm(s: ReturnType<typeof setup>, impl: (answers: Record<string, string>, before: () => Promise<boolean>) => Promise<any>) {
+  const calls: any[] = [];
+  s.deps.submitForm = async (channel: any, input: any, beforeSubmit: () => Promise<boolean>) => { calls.push({ channel, input }); return impl(input.answers, beforeSubmit); };
+  return calls;
+}
+
+test('formulaire Lever : envoyé après la dernière vérification, confirmation conservée', async () => {
+  const s = setup();
+  const calls = withForm(s, async (_a, before) => (await before()) ? { status: 'submitted', proof: { url: 'https://jobs.lever.co/acme/x/thanks', confirmationText: 'Application submitted' } } : { status: 'cancelled', reason: 'pause' });
+  await s.add(leverOffer('f1'));
+  await s.drain();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].input.cvPdf.toString().slice(0, 4), '%PDF');
+  assert.equal(s.sent.length, 0, 'pas d’email');
+  const att = [...s.store.attempts.values()][0];
+  assert.deepEqual([att.channel, att.status, att.proof.confirmationText], ['lever', 'submitted', 'Application submitted']);
+  assert.equal(s.store.applications.get(`${U}:${autoApplicationId('f1')}`)!.status, 'applied');
+});
+
+test('question obligatoire inconnue : posée au candidat, puis envoi une fois la réponse enregistrée', async () => {
+  const s = setup();
+  withForm(s, async (answers, before) => answers['permis-b']
+    ? ((await before()) ? { status: 'submitted', proof: { url: 'u', confirmationText: 'Thank you for applying' } } : { status: 'cancelled', reason: '' })
+    : { status: 'needs_user', reason: 'Question « Permis B ? » sans réponse', questions: [{ key: 'permis-b', label: 'Permis B ?' }] });
+  await s.add(leverOffer('f2'));
+  await s.drain();
+  assert.equal(s.status('f2'), 'needs_user');
+  assert.ok(s.store.events.some(e => e.type === 'questions' && e.data.questions[0].key === 'permis-b'));
+  s.store.answers.set(U, { 'permis-b': 'Oui' });
+  await s.store.enqueue({ userId: U, kind: 'process_offer', offerId: 'f2' });
+  await s.drain();
+  assert.equal(s.store.applications.get(`${U}:${autoApplicationId('f2')}`)!.status, 'applied');
+  assert.equal(s.store.attempts.size, 1);
+});
+
+test('formulaire : pause au dernier moment → rien n’est soumis', async () => {
+  const s = setup();
+  let clicked = false;
+  withForm(s, async (_a, before) => { s.store.policies.get(U)!.paused = true; if (await before()) clicked = true; return clicked ? { status: 'submitted', proof: { url: '', confirmationText: '' } } : { status: 'cancelled', reason: 'pause' }; });
+  await s.add(leverOffer('f3'));
+  await s.drain();
+  assert.equal(clicked, false);
+  assert.equal([...s.store.attempts.values()][0].status, 'cancelled');
+});
+
+test('formulaire sans confirmation : incertain, jamais resoumis', async () => {
+  const s = setup();
+  const calls = withForm(s, async (_a, before) => { await before(); return { status: 'uncertain', reason: 'pas de confirmation' }; });
+  await s.add(leverOffer('f4'));
+  await s.drain();
+  await s.store.enqueue({ userId: U, kind: 'process_offer', offerId: 'f4' });
+  await s.drain();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(s.store.tasks.filter(t => t.offerId === 'f4').map(t => t.status), ['uncertain', 'done']);
+});
+
+test('canal formulaire non autorisé par le candidat : dossier prêt, rien n’est soumis', async () => {
+  const s = setup();
+  s.store.policies.get(U)!.channels = ['email'];
+  const calls = withForm(s, async () => ({ status: 'submitted', proof: { url: '', confirmationText: '' } }));
+  await s.add(leverOffer('f5'));
+  await s.drain();
+  assert.equal(calls.length, 0);
+  assert.equal(s.status('f5'), 'needs_user');
+});

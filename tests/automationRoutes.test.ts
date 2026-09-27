@@ -148,3 +148,18 @@ test('déconnexion : jetons supprimés', { skip }, async () => {
   assert.equal((await call('DELETE', '/api/automation/connections/gmail', A)).status, 200);
   assert.equal((await q(`select count(*)::int as n from public.mail_connections where user_id = $1`, [A]))[0].n, 0);
 });
+
+test('questions de formulaire : listées, réponses enregistrées une fois, offre relancée', { skip }, async () => {
+  await q(`insert into public.job_offers (id, source, source_ref, title, offer_url) values ('gh-1', 'test', '1', 'Dev', 'https://job-boards.greenhouse.io/acme/jobs/1')`);
+  await q(`insert into public.automation_events (user_id, type, message, data) values ($1, 'questions', 'Questions', $2)`,
+    [A, JSON.stringify({ offerId: 'gh-1', questions: [{ key: 'permis-b', label: 'Avez-vous le permis B ?' }] })]);
+  let st = await call('GET', '/api/automation', A);
+  assert.deepEqual(st.json.questions, [{ key: 'permis-b', label: 'Avez-vous le permis B ?' }]);
+  assert.equal((await call('POST', '/api/automation/answers', A, { answers: [{ key: '../../x', answer: 'y' }] })).status, 400);
+  const r = await call('POST', '/api/automation/answers', A, { answers: [{ key: 'permis-b', question: 'Avez-vous le permis B ?', answer: 'Oui' }] });
+  assert.deepEqual([r.json.saved, r.json.requeued], [1, 1]);
+  st = await call('GET', '/api/automation', A);
+  assert.deepEqual(st.json.questions, []);
+  assert.equal((await q(`select answer from public.personal_answers where user_id = $1 and question_key = 'permis-b'`, [A]))[0].answer, 'Oui');
+  assert.equal((await call('GET', '/api/automation', B)).json.questions.length, 0, 'isolation');
+});

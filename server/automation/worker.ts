@@ -16,6 +16,7 @@ import { qualifyOffer, type AutomationPolicy } from "./policy.ts";
 import { resolveApplyChannel, isAutomatable, type ApplyChannel } from "./channels.ts";
 import { MailSendError, decryptToken, encryptToken, sha256, type MailProvider, type OutgoingMail, type SendResult } from "./email.ts";
 import type { PreparedCv, PreparedLetter } from "../services/documents.ts";
+import type { FormInput, FormResult } from "./forms.ts";
 
 export interface Outcome {
   status: Exclude<TaskStatus, "running">;
@@ -31,6 +32,8 @@ export interface WorkerDeps {
   sendMail(provider: MailProvider, accessToken: string, mail: OutgoingMail): Promise<SendResult>;
   refreshAccessToken(provider: MailProvider, refreshToken: string): Promise<{ accessToken: string; expiresAt: string; refreshToken?: string }>;
   searchOffers?(policy: AutomationPolicy, profile: any): Promise<any[]>;
+  /** Formulaire Lever / Greenhouse (navigateur côté serveur). beforeSubmit revérifie la pause juste avant le clic. */
+  submitForm?(channel: Extract<ApplyChannel, { kind: "lever" | "greenhouse" }>, input: FormInput, beforeSubmit: () => Promise<boolean>): Promise<FormResult>;
   now?: () => Date;
 }
 
@@ -94,7 +97,7 @@ export async function processOffer(task: Task, deps: WorkerDeps): Promise<Outcom
     return intervention("Ce canal n'est pas autorisé dans vos réglages d'automatisation.");
   }
   if (!ready.ok) return intervention(`Validation nécessaire avant l'envoi : ${ready.reasons.join(" ")}`);
-  if (channel.kind !== "email") return intervention("Formulaire reconnu : l'envoi automatique par formulaire n'est pas encore activé. Votre dossier est prêt.");
+  if (channel.kind === "lever" || channel.kind === "greenhouse") return submitByForm(task, deps, { profile, offer, channel, cv, letter, baseApp, dossier, intervention, now });
 
   // Messagerie connectée ?
   const conn = await store.getMailConnection(userId);
@@ -185,6 +188,70 @@ export async function processOffer(task: Task, deps: WorkerDeps): Promise<Outcom
   });
   await store.logEvent(userId, "submitted", `Candidature envoyée à ${offer.company} (${channel.target}).`, { offerId: offer.id, proof }, refs);
   return done("Candidature envoyée.");
+}
+
+/** Envoi par formulaire (Lever, Greenhouse) : mêmes garanties que l'email (réservation, pause, preuve, incertitude). */
+async function submitByForm(
+  task: Task,
+  deps: WorkerDeps,
+  c: { profile: any; offer: any; channel: Extract<ApplyChannel, { kind: "lever" | "greenhouse" }>; cv: PreparedCv; letter: PreparedLetter; baseApp: any; dossier: any; intervention: (reason: string, state?: string) => Promise<Outcome>; now: Date }
+): Promise<Outcome> {
+  const { store } = deps;
+  const { profile, offer, channel, now } = c;
+  if (!deps.submitForm) return c.intervention("Envoi par formulaire indisponible sur ce serveur : votre dossier est prêt.");
+  const pdf = await deps.renderCvPdf(profile, c.cv, offer);
+  const cvName = `CV - ${String(profile.fullName || "Candidat").replace(/[\\/:*?"<>|]+/g, "")}.pdf`;
+  const answers = await store.getPersonalAnswers(task.userId);
+  const reservation = await store.reserveAttempt({
+    userId: task.userId, offerId: offer.id, channel: channel.kind, destination: channel.target, profileVersion: profileVersion(profile),
+    documents: [{ kind: "cv", name: cvName, sha256: sha256(pdf), bytes: pdf.length }, { kind: "letter", name: "lettre", sha256: sha256(Buffer.from(c.letter.letter)), bytes: Buffer.byteLength(c.letter.letter) }],
+    answers
+  });
+  if (!reservation.attemptId) {
+    switch (reservation.reason) {
+      case "DAILY_LIMIT": return retry("Limite quotidienne atteinte : envoi reporté à demain.", secondsUntilTomorrowParis(now));
+      case "ALREADY_ATTEMPTED": return done("Candidature déjà envoyée pour cette offre.");
+      default: return { status: "cancelled", message: "Automatisation désactivée ou en pause." };
+    }
+  }
+  const attemptId = reservation.attemptId;
+  const refs = { taskId: task.id, attemptId };
+  let begun = false;
+  const result = await deps.submitForm(channel, { profile, cvPdf: pdf, cvFileName: cvName, letter: c.letter.letter, answers }, async () => {
+    begun = (await store.beginSubmission(attemptId)) === "OK";
+    return begun;
+  }).catch((e: any): FormResult => begun
+    ? { status: "uncertain", reason: `Erreur pendant l'envoi : ${String(e?.message || e).slice(0, 120)}` }
+    : { status: "needs_user", reason: `Formulaire inaccessible : ${String(e?.message || e).slice(0, 120)}` });
+
+  const site = channel.kind === "lever" ? "Lever" : "Greenhouse";
+  if (result.status === "submitted") {
+    const proof = { site, url: result.proof.url, confirmationText: result.proof.confirmationText, form: channel.target };
+    await store.recordSubmission(attemptId, "submitted", proof);
+    await store.upsertApplication(task.userId, {
+      ...c.baseApp, ...c.dossier, status: "applied", appliedAt: now.toISOString(),
+      followUpAt: new Date(now.getTime() + 7 * 864e5).toISOString(),
+      automation: { state: "submitted", channel: channel.kind, target: channel.target, attemptId, proof, updatedAt: now.toISOString() },
+      logEvents: [{ timestamp: now.toLocaleString("fr-FR"), message: `Candidature envoyée automatiquement par le formulaire ${site} (confirmation affichée).` }]
+    });
+    await store.logEvent(task.userId, "submitted", `Candidature envoyée à ${offer.company} (formulaire ${site}).`, { offerId: offer.id, proof }, refs);
+    return done("Candidature envoyée.");
+  }
+  if (result.status === "uncertain") {
+    await store.recordSubmission(attemptId, "uncertain", null, result.reason);
+    await store.upsertApplication(task.userId, {
+      ...c.baseApp, ...c.dossier, status: "prepared",
+      automation: { state: "uncertain", reason: "Résultat incertain : vérifiez vos emails (accusé de réception) avant de renvoyer.", channel: channel.kind, target: channel.target, attemptId, updatedAt: now.toISOString() }
+    });
+    await store.logEvent(task.userId, "uncertain", `Résultat incertain pour ${offer.company} (formulaire ${site}).`, { offerId: offer.id }, refs);
+    return { status: "uncertain", message: result.reason };
+  }
+  if (result.status === "cancelled") return { status: "cancelled", message: result.reason };
+  await store.recordSubmission(attemptId, "needs_user", null, result.reason);
+  if (result.questions?.length) {
+    await store.logEvent(task.userId, "questions", "Questions à compléter pour les prochaines candidatures.", { offerId: offer.id, questions: result.questions }, refs);
+  }
+  return c.intervention(result.reason);
 }
 
 /** Recherche planifiée : nouvelles offres qualifiées ajoutées à la file (sans doublon). */

@@ -11,7 +11,7 @@
 import dotenv from "dotenv";
 import os from "node:os";
 import { PgAutomationStore } from "./automation/pgStore.ts";
-import { realDeps } from "./automation/runtime.ts";
+import { realDeps, closeFormBrowser } from "./automation/runtime.ts";
 import { runOnce } from "./automation/worker.ts";
 import { closeWebPdf } from "./pdf.ts";
 import { logEvent } from "./log.ts";
@@ -64,7 +64,7 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     stopping = true;
     logEvent("info", "automation_worker_stopping", { workerId, signal });
     // Les tâches en cours gardent leur bail : si l'arrêt interrompt un envoi, il sera marqué « incertain », jamais renvoyé
-    await Promise.allSettled([closeWebPdf(), store!.close()]);
+    await Promise.allSettled([closeWebPdf(), closeFormBrowser(), store!.close()]);
     process.exit(0);
   });
 }

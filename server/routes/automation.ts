@@ -146,6 +146,15 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
       `select type, message, created_at from public.automation_events where user_id = $1 order by created_at desc limit 50`,
       [uid]
     );
+    // Questions de formulaires sans réponse enregistrée (30 derniers jours)
+    const asked = await q(
+      `select distinct on (qq->>'key') qq->>'key' as key, qq->>'label' as label
+         from public.automation_events e, jsonb_array_elements(e.data->'questions') qq
+        where e.user_id = $1 and e.type = 'questions' and e.created_at > now() - interval '30 days'
+          and not exists (select 1 from public.personal_answers a where a.user_id = e.user_id and a.question_key = qq->>'key')
+        order by qq->>'key', e.created_at desc limit 20`,
+      [uid]
+    );
     const policy = policyRow ? { ...policyFromRow(policyRow), consentedAt: policyRow.consented_at } : null;
     return res.json({
       available: true,
@@ -156,7 +165,8 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
       today: { sent: today?.sent || 0, uncertain: today?.uncertain || 0, limit: policy?.dailyLimit ?? null },
       pending: tasks?.pending || 0,
       needsUser: tasks?.needs_user || 0,
-      events: events.map((e) => ({ type: e.type, message: e.message, at: e.created_at }))
+      events: events.map((e) => ({ type: e.type, message: e.message, at: e.created_at })),
+      questions: asked.map((a) => ({ key: a.key, label: a.label }))
     });
   });
 
@@ -188,6 +198,30 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
       [req.uid, policy.enabled ? "Candidature automatique activée." : "Réglages enregistrés (candidature automatique désactivée)."]);
     logEvent("info", "automation_policy_saved", { enabled: policy.enabled, channels: policy.channels });
     return res.json({ success: true, policy: { ...policyFromRow(row), consentedAt: row.consented_at } });
+  });
+
+  // Réponses aux questions des formulaires : enregistrées une fois, réutilisées ; les offres en attente sont relancées
+  app.post("/api/automation/answers", auth, limiter, guard, async (req: any, res) => {
+    const items = (Array.isArray(req.body?.answers) ? req.body.answers : []).slice(0, 20)
+      .map((a: any) => ({ key: String(a?.key || "").slice(0, 80), question: String(a?.question || "").slice(0, 200), answer: String(a?.answer ?? "").trim().slice(0, 1000) }))
+      .filter((a: any) => /^[a-z0-9-]{1,80}$/.test(a.key) && a.answer);
+    if (!items.length) return res.status(400).json({ success: false, error: "Aucune réponse à enregistrer." });
+    for (const a of items) {
+      await q(
+        `insert into public.personal_answers (user_id, question_key, question, answer) values ($1, $2, $3, $4)
+         on conflict (user_id, question_key) do update set question = excluded.question, answer = excluded.answer, updated_at = now()`,
+        [req.uid, a.key, a.question || a.key, a.answer]
+      );
+    }
+    const requeued = await q(
+      `insert into public.automation_tasks (user_id, kind, offer_id)
+       select distinct $1::uuid, 'process_offer', e.data->>'offerId' from public.automation_events e
+        where e.user_id = $1 and e.type = 'questions' and e.created_at > now() - interval '30 days' and e.data->>'offerId' is not null
+          and exists (select 1 from public.job_offers o where o.id = e.data->>'offerId')
+       on conflict do nothing returning id`,
+      [req.uid]
+    );
+    return res.json({ success: true, saved: items.length, requeued: requeued.length });
   });
 
   for (const action of ["pause", "resume"] as const) {

@@ -119,6 +119,11 @@ export class PgAutomationStore implements AutomationStore {
     return { provider: r.provider, email: r.email, status: r.status, accessTokenEnc: r.access_token_enc, refreshTokenEnc: r.refresh_token_enc, expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : null };
   }
 
+  async getPersonalAnswers(userId: string) {
+    const rows = await this.q(`select question_key, answer from public.personal_answers where user_id = $1`, [userId]);
+    return Object.fromEntries(rows.map((r) => [r.question_key, r.answer]));
+  }
+
   async saveMailTokens(userId: string, provider: string, tokens: any) {
     if ("status" in tokens) {
       await this.q(`update public.mail_connections set status = $3 where user_id = $1 and provider = $2`, [userId, provider, tokens.status]);

@@ -16,6 +16,7 @@ interface AutomationState {
   pending: number;
   needsUser: number;
   events: { type: string; message: string; at: string }[];
+  questions?: { key: string; label: string }[];
 }
 
 const CONTRACTS = [['cdi', 'CDI'], ['cdd', 'CDD'], ['alternance', 'Alternance'], ['stage', 'Stage'], ['freelance', 'Freelance']] as const;
@@ -34,6 +35,7 @@ export const AutoApplyPanel: React.FC<{ defaultRoles: string[]; defaultLocation?
   const [busy, setBusy] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
   const [consent, setConsent] = useState(false);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
   const [form, setForm] = useState({ roles: '', locations: '', contracts: [] as string[], email: true, form: false, minFit: 60, dailyLimit: 5, excludedCompanies: '', excludedKeywords: '' });
 
   const load = async () => {
@@ -222,7 +224,7 @@ export const AutoApplyPanel: React.FC<{ defaultRoles: string[]; defaultLocation?
         <fieldset className="sm:col-span-2">
           <legend className="text-sm font-medium text-slate-700">Canaux d’envoi</legend>
           <label className="mt-1 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={form.email} onChange={e => set({ email: e.target.checked })} /> Email à l’adresse de candidature publiée par l’offre</label>
-          <label className="mt-1 flex items-center gap-2 text-sm text-slate-500"><input type="checkbox" checked={form.form} onChange={e => set({ form: e.target.checked })} /> Formulaires des sites carrières (Lever, Greenhouse) — dossier préparé, envoi automatique bientôt</label>
+          <label className="mt-1 flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={form.form} onChange={e => set({ form: e.target.checked })} /> Formulaires des sites carrières Lever et Greenhouse (les questions inconnues vous sont posées, jamais inventées)</label>
         </fieldset>
       </div>
 
@@ -256,6 +258,33 @@ export const AutoApplyPanel: React.FC<{ defaultRoles: string[]; defaultLocation?
             <Button type="button" variant="ghost" onClick={() => setConsentOpen(false)}>Annuler</Button>
           </div>
         </div>
+      )}
+
+      {!!state.questions?.length && (
+        <form
+          className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const list = state.questions!.filter(qq => (answers[qq.key] || '').trim()).map(qq => ({ key: qq.key, question: qq.label, answer: answers[qq.key].trim() }));
+            if (!list.length) return;
+            setBusy(true);
+            try {
+              const res = await apiFetch('/api/automation/answers', { answers: list });
+              const data = await res.json().catch(() => null);
+              if (!res.ok) onNotify('Réponses non enregistrées', data?.error || 'Réessayez.', true);
+              else { onNotify('Réponses enregistrées', 'Elles serviront aux prochaines candidatures ; les offres en attente sont relancées.'); setAnswers({}); await load(); }
+            } finally { setBusy(false); }
+          }}
+        >
+          <p className="text-sm font-semibold text-amber-900">Questions des formulaires à compléter</p>
+          <p className="text-xs text-amber-800">Ces réponses personnelles ne sont jamais devinées par l’IA. Vous ne répondez qu’une fois.</p>
+          {state.questions!.map(qq => (
+            <label key={qq.key} className="block text-sm text-slate-700">{qq.label}
+              <input className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" value={answers[qq.key] || ''} onChange={e => setAnswers(a => ({ ...a, [qq.key]: e.target.value }))} />
+            </label>
+          ))}
+          <Button type="submit" size="sm" variant="primary" disabled={busy}>Enregistrer mes réponses</Button>
+        </form>
       )}
 
       {state.events.length > 0 && (

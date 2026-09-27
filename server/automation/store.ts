@@ -49,6 +49,8 @@ export interface AutomationStore {
   beginSubmission(attemptId: string): Promise<"OK" | "PAUSED" | "NOT_RESERVED" | "NOT_FOUND">;
   recordSubmission(attemptId: string, status: AttemptStatus, proof?: Record<string, any> | null, error?: string | null): Promise<boolean>;
   getMailConnection(userId: string): Promise<MailConnection | null>;
+  /** Réponses enregistrées par le candidat aux questions des formulaires (clé normalisée → réponse). */
+  getPersonalAnswers(userId: string): Promise<Record<string, string>>;
   saveMailTokens(userId: string, provider: string, tokens: { accessTokenEnc: string; refreshTokenEnc?: string; expiresAt: string } | { status: "revoked" | "error" }): Promise<void>;
   /** Dossier visible dans l'application (tableau Candidatures). */
   upsertApplication(userId: string, application: Record<string, any>): Promise<void>;
@@ -66,6 +68,7 @@ export class MemoryAutomationStore implements AutomationStore {
   attempts = new Map<string, ReserveInput & { id: string; status: AttemptStatus; proof: any; error: string | null; createdAt: number }>();
   mail = new Map<string, MailConnection>();
   applications = new Map<string, Record<string, any>>();
+  answers = new Map<string, Record<string, string>>();
   events: { userId: string; type: string; message: string; data?: any }[] = [];
   private seq = 0;
   now = () => Date.now();
@@ -143,6 +146,7 @@ export class MemoryAutomationStore implements AutomationStore {
   }
 
   async getMailConnection(userId: string) { return this.mail.get(userId) || null; }
+  async getPersonalAnswers(userId: string) { return this.answers.get(userId) || {}; }
   async saveMailTokens(userId: string, _provider: string, tokens: any) {
     const c = this.mail.get(userId);
     if (!c) return;

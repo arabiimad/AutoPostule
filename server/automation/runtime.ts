@@ -11,6 +11,8 @@ import { sendMail, refreshAccessToken } from "./email.ts";
 import type { WorkerDeps } from "./worker.ts";
 import type { AutomationStore } from "./store.ts";
 import type { AutomationPolicy } from "./policy.ts";
+import { submitApplicationForm } from "./forms.ts";
+import type { Browser } from "playwright";
 
 export async function searchForPolicy(policy: AutomationPolicy): Promise<any[]> {
   const roles = policy.roles.slice(0, 3);
@@ -25,6 +27,22 @@ export async function searchForPolicy(policy: AutomationPolicy): Promise<any[]> 
   }
   return [...byId.values()];
 }
+
+// Navigateur dédié aux formulaires (contexte neuf et isolé pour chaque candidature)
+let formBrowser: Promise<Browser> | null = null;
+async function browser(): Promise<Browser> {
+  formBrowser ||= import("playwright").then(({ chromium }) =>
+    chromium.launch({ headless: true, executablePath: process.env.PW_CHROMIUM_PATH || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] }));
+  const b = await formBrowser;
+  if (!b.isConnected()) { formBrowser = null; return browser(); }
+  return b;
+}
+export async function closeFormBrowser() {
+  const b = formBrowser;
+  formBrowser = null;
+  if (b) await (await b).close().catch(() => {});
+}
+const FORM_HOSTS = /^(jobs(\.eu)?\.lever\.co|(boards|job-boards)(\.eu)?\.greenhouse\.io)$/;
 
 export function realDeps(store: AutomationStore, workerId: string): WorkerDeps {
   return {
@@ -42,6 +60,21 @@ export function realDeps(store: AutomationStore, workerId: string): WorkerDeps {
     },
     sendMail: (provider, token, mail) => sendMail(provider, token, mail),
     refreshAccessToken: (provider, rt) => refreshAccessToken(provider, rt),
-    searchOffers: (policy) => searchForPolicy(policy)
+    searchOffers: (policy) => searchForPolicy(policy),
+    async submitForm(channel, input, beforeSubmit) {
+      const ctx = await (await browser()).newContext({ locale: "fr-FR", acceptDownloads: false });
+      try {
+        const page = await ctx.newPage();
+        page.setDefaultTimeout(30_000);
+        await page.goto(channel.target, { waitUntil: "load" });
+        // Redirection hors du logiciel de recrutement (offre fermée, site carrières) : pas d'envoi automatique
+        if (!FORM_HOSTS.test(new URL(page.url()).hostname)) {
+          return { status: "needs_user", reason: "Le formulaire redirige vers un autre site : terminez la candidature vous-même." };
+        }
+        return await submitApplicationForm(page, channel.kind, input, { beforeSubmit });
+      } finally {
+        await ctx.close().catch(() => {});
+      }
+    }
   };
 }
