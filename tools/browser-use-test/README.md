@@ -13,4 +13,4 @@ question « permis B », date, salaire, liste, motivation) → confirmation. Var
     cat submissions.json                      # ce qui a réellement été envoyé
 
 Chromium : CHROME_PATH (défaut /opt/pw-browsers/chromium-1194/chrome-linux/chrome ; sur ton PC, omets-le
-ou mets le chemin de Chrome). Modèle : BU_MODEL (défaut gemini-2.5-flash).
+ou mets le chemin de Chrome). Modèle : BU_MODEL (défaut gemini-3.8-flash, le modèle rapide de Kareer).

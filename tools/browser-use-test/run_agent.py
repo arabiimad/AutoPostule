@@ -11,7 +11,7 @@ URL = "http://127.0.0.1:8765/" + ("offre-captcha" if "captcha" in sys.argv else 
 def pick_llm():
     if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
         from browser_use import ChatGoogle
-        return ChatGoogle(model=os.getenv("BU_MODEL", "gemini-2.5-flash"), api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+        return ChatGoogle(model=os.getenv("BU_MODEL", "gemini-3.8-flash"), api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
     if os.getenv("ANTHROPIC_API_KEY"):
         from browser_use import ChatAnthropic
         return ChatAnthropic(model=os.getenv("BU_MODEL", "claude-sonnet-5"))
