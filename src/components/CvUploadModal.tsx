@@ -346,8 +346,7 @@ export const CvUploadModal: React.FC<CvUploadModalProps> = ({
     { key: 'location', label: 'Ville et mobilité', placeholder: 'Paris, France (télétravail)' },
     { key: 'linkedinUrl', label: 'Profil LinkedIn', placeholder: 'linkedin.com/in/…' },
     { key: 'githubUrl', label: 'Profil GitHub', placeholder: 'github.com/…' },
-    { key: 'portfolioUrl', label: 'Site web / portfolio', placeholder: 'mon-site.fr' },
-    { key: 'overleafUser', label: 'Identifiant Overleaf (facultatif)', placeholder: 'pseudo_overleaf' }
+    { key: 'portfolioUrl', label: 'Site web / portfolio', placeholder: 'mon-site.fr' }
   ];
 
   const footer =
