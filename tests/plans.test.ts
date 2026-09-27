@@ -7,7 +7,7 @@ import type { Server } from 'node:http';
 for (const k of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'UPSTASH_REDIS_REST_URL', 'QUOTAS']) delete process.env[k];
 process.env.QUOTA_FREE_CV = '2';
 
-const { requireQuota, planLimits, currentPeriod } = await import('../server/plans.ts');
+const { requireQuota, planLimits, currentPeriod, getUsage } = await import('../server/plans.ts');
 const { verifyStripeSignature, formEncode } = await import('../server/stripe.ts');
 
 let server: Server;
@@ -76,4 +76,55 @@ test('Stripe : encodage des paramètres imbriqués', () => {
     formEncode({ mode: 'subscription', line_items: [{ price: 'price_1', quantity: 1 }], metadata: { uid: 'a b' } }),
     'mode=subscription&line_items%5B0%5D%5Bprice%5D=price_1&line_items%5B0%5D%5Bquantity%5D=1&metadata%5Buid%5D=a%20b'
   );
+});
+
+test('quota réservé avant traitement : 10 requêtes simultanées pour 3 autorisées', async () => {
+  const prev = { q: process.env.QUOTAS, l: process.env.QUOTA_FREE_CV };
+  process.env.QUOTAS = 'on';
+  process.env.QUOTA_FREE_CV = '3';
+  try {
+    const mw = requireQuota('cv');
+    const ip = `concurrence-${Date.now()}`;
+    const run = () => new Promise<number>((resolve) => {
+      const listeners: Record<string, () => void> = {};
+      const res: any = {
+        statusCode: 200, locals: {},
+        status(c: number) { this.statusCode = c; return this; },
+        json() { resolve(this.statusCode); listeners.finish?.(); return this; },
+        on(ev: string, fn: () => void) { listeners[ev] = fn; }
+      };
+      mw({ ip } as any, res, () => { resolve(200); listeners.finish?.(); });
+    });
+    const codes = await Promise.all(Array.from({ length: 10 }, run));
+    assert.equal(codes.filter(c => c === 200).length, 3, codes.join(','));
+    assert.equal(codes.filter(c => c === 402).length, 7);
+    assert.equal((await getUsage({ ip })).cv, 3);
+  } finally {
+    process.env.QUOTAS = prev.q;
+    process.env.QUOTA_FREE_CV = prev.l;
+  }
+});
+
+test('quota rendu quand l’action échoue ou n’est pas facturée', async () => {
+  const prev = process.env.QUOTAS;
+  process.env.QUOTAS = 'on';
+  try {
+    const mw = requireQuota('letter');
+    const ip = `remboursement-${Date.now()}`;
+    for (const outcome of [{ status: 500 }, { status: 200, noCharge: true }]) {
+      await new Promise<void>((resolve) => {
+        let finish = () => {};
+        const res: any = { statusCode: 200, locals: {}, status() { return this; }, json() { return this; }, on(ev: string, fn: () => void) { if (ev === 'finish') finish = fn; } };
+        mw({ ip } as any, res, () => {
+          res.statusCode = outcome.status;
+          if (outcome.noCharge) res.locals.noCharge = true;
+          finish();
+          setTimeout(resolve, 20);
+        });
+      });
+    }
+    assert.equal((await getUsage({ ip })).letter, 0);
+  } finally {
+    process.env.QUOTAS = prev;
+  }
 });

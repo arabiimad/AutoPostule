@@ -109,14 +109,32 @@ export async function getUsage(who: { uid?: string; ip?: string }, period = curr
   return usage;
 }
 
-export async function incrementUsage(who: { uid?: string; ip?: string }, kind: QuotaKind, period = currentPeriod()): Promise<void> {
+export async function incrementUsage(who: { uid?: string; ip?: string }, kind: QuotaKind, period = currentPeriod(), amount = 1): Promise<number> {
   const admin = who.uid ? supabaseAdmin() : null;
   if (who.uid && admin) {
-    await admin(`/rest/v1/rpc/increment_usage`, { method: "POST", body: JSON.stringify({ p_user: who.uid, p_period: period, p_kind: kind, p_amount: 1 }) });
-    return;
+    const n = await admin(`/rest/v1/rpc/increment_usage`, { method: "POST", body: JSON.stringify({ p_user: who.uid, p_period: period, p_kind: kind, p_amount: amount }) });
+    return Number(n) || 0;
   }
   const id = who.uid ? `uid:${who.uid}` : `ip:${who.ip || "unknown"}`;
-  await kv().incr(`usage:${period}:${id}:${kind}`, 40 * 86400);
+  const key = `usage:${period}:${id}:${kind}`;
+  return amount >= 0 ? kv().incr(key, 40 * 86400) : kv().decr(key);
+}
+
+/**
+ * Réserve une unité de quota AVANT le traitement (incrément atomique puis contrôle) :
+ * des requêtes simultanées ne peuvent pas dépasser la limite. Renvoie false si la limite est atteinte
+ * (la réservation est alors annulée).
+ */
+export async function reserveUsage(who: { uid?: string; ip?: string }, kind: QuotaKind, limit: number, period = currentPeriod()): Promise<boolean> {
+  const count = await incrementUsage(who, kind, period, 1);
+  if (count <= limit) return true;
+  await releaseUsage(who, kind, period);
+  return false;
+}
+
+/** Annule une réservation (échec du traitement ou action non facturée). */
+export async function releaseUsage(who: { uid?: string; ip?: string }, kind: QuotaKind, period = currentPeriod()): Promise<void> {
+  await incrementUsage(who, kind, period, -1);
 }
 
 /**
@@ -130,10 +148,12 @@ export function requireQuota(kind: QuotaKind) {
     req.plan = plan;
     if (String(process.env.QUOTAS || "on").toLowerCase() === "off") return next();
     const who = { uid: req.uid, ip: String(req.ip || "") };
+    const period = currentPeriod();
+    const limit = planLimits(plan)[kind];
+    let reserved = false;
     try {
-      const used = (await getUsage(who))[kind];
-      const limit = planLimits(plan)[kind];
-      if (used >= limit) {
+      reserved = await reserveUsage(who, kind, limit, period);
+      if (!reserved) {
         logEvent("info", "quota_exceeded", { kind, plan, uid: req.uid ? "account" : "anonymous" });
         return res.status(402).json({
           success: false,
@@ -150,9 +170,10 @@ export function requireQuota(kind: QuotaKind) {
       // Compteur indisponible : on laisse passer plutôt que de bloquer l'utilisateur
       logEvent("warn", "quota_check_failed", { kind, message: String(e?.message || e).slice(0, 200) });
     }
+    // Réservation rendue si l'action échoue ou n'est pas facturée (modèle standard, évaluation locale…)
     res.on("finish", () => {
-      if (res.statusCode < 400 && !res.locals?.noCharge) {
-        incrementUsage(who, kind).catch((e) => logEvent("warn", "usage_increment_failed", { kind, message: String(e?.message || e).slice(0, 200) }));
+      if (reserved && (res.statusCode >= 400 || res.locals?.noCharge)) {
+        releaseUsage(who, kind, period).catch((e) => logEvent("warn", "usage_release_failed", { kind, message: String(e?.message || e).slice(0, 200) }));
       }
     });
     next();

@@ -13,6 +13,8 @@ export interface KV {
   set(key: string, value: string, ttlSec: number): Promise<void>;
   /** Incrémente et renvoie la nouvelle valeur ; la clé expire après ttlSec (0 = jamais). */
   incr(key: string, ttlSec: number): Promise<number>;
+  /** Décrémente (sans descendre sous 0) et renvoie la nouvelle valeur. */
+  decr(key: string): Promise<number>;
 }
 
 class MemoryKV implements KV {
@@ -60,6 +62,14 @@ class MemoryKV implements KV {
     this.data.set(key, { value: String(next), expiresAt: e?.expiresAt || (ttlSec > 0 ? Date.now() + ttlSec * 1000 : 0) });
     return next;
   }
+
+  async decr(key: string) {
+    const e = this.alive(key);
+    if (!e) return 0;
+    const next = Math.max(0, (Number(e.value) || 0) - 1);
+    e.value = String(next);
+    return next;
+  }
 }
 
 class UpstashKV implements KV {
@@ -105,6 +115,14 @@ class UpstashKV implements KV {
       return n;
     } catch {
       return this.fallback.incr(key, ttlSec);
+    }
+  }
+
+  async decr(key: string) {
+    try {
+      return Number(await this.cmd(["DECR", key]));
+    } catch {
+      return this.fallback.decr(key);
     }
   }
 }
