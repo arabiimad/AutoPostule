@@ -120,6 +120,19 @@ export function startMockSources(port = 4011) {
         return;
       }
       if (u.startsWith('/gmail/sent')) return res.end(JSON.stringify(mailbox));
+      // Faux fournisseur OAuth Google : autorisation immédiate puis échange du code
+      if (u.startsWith('/oauth/authorize')) {
+        const back = new URL(url.searchParams.get('redirect_uri'));
+        back.searchParams.set('code', 'code-e2e');
+        back.searchParams.set('state', url.searchParams.get('state') || '');
+        res.statusCode = 302;
+        res.setHeader('Location', back.toString());
+        return res.end();
+      }
+      if (u.startsWith('/oauth/token')) {
+        const idToken = `x.${Buffer.from(JSON.stringify({ email: 'karim@gmail.com' })).toString('base64url')}.y`;
+        return res.end(JSON.stringify({ access_token: 'jeton-acces-karim', refresh_token: 'jeton-refresh', expires_in: 3599, scope: 'openid email https://www.googleapis.com/auth/gmail.send', id_token: idToken }));
+      }
       res.statusCode = 404; res.end('{}');
     });
     server.listen(port, () => resolve(server));

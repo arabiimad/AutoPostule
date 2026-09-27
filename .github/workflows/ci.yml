@@ -50,3 +50,6 @@ jobs:
 
       - name: Auto-candidature de bout en bout (worker réel, PostgreSQL, Gmail simulé)
         run: npm run test:e2e:worker
+
+      - name: Candidature automatique dans le navigateur (interface + worker réels)
+        run: npm run test:e2e:automation

@@ -43,7 +43,8 @@ const AppCard: React.FC<{
 }> = ({ app, onOpenLatex, onInterview, onStatus, onApply, onFollowUp, onDelete }) => {
   const [copied, setCopied] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const hasDossier = !!app.latexResumeCode;
+  // Dossier préparé : code LaTeX (Studio) ou contenu adapté (candidature automatique)
+  const hasDossier = !!(app.latexResumeCode || app.tailoredContent);
   const due = isDue(app);
 
   const copyLetter = async () => {
@@ -75,9 +76,16 @@ const AppCard: React.FC<{
       <div className="mt-3 flex flex-wrap gap-1.5">
         <Badge>{CONTRACT_LABELS[app.contractType] || app.contractType}</Badge>
         {app.isSpontaneous && <Badge tone="sky">Spontanée</Badge>}
+        {app.automation?.state === 'submitted' && <Badge tone="green" title={app.automation.target ? `Envoyée à ${app.automation.target}` : undefined}>Envoyée automatiquement</Badge>}
+        {app.automation?.state === 'needs_user' && <Badge tone="amber" title={app.automation.reason}>À valider par vous</Badge>}
+        {app.automation?.state === 'uncertain' && <Badge tone="amber" title={app.automation.reason}>Envoi à vérifier</Badge>}
 
         {(app.versions?.length || 0) > 0 && <Badge title="Versions précédentes du CV et de la lettre">{app.versions!.length + 1} versions</Badge>}
       </div>
+
+      {app.automation?.reason && app.automation.state !== 'submitted' && (
+        <p className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">{app.automation.reason}</p>
+      )}
 
       <p className="mt-2 text-xs text-slate-400">
         {app.appliedAt ? `Envoyée le ${formatLongDate(app.appliedAt)}` : `Ajoutée le ${formatLongDate(app.createdAt)}`}

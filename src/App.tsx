@@ -6,6 +6,7 @@ import { Header } from './components/Header';
 import { JobSearchView } from './components/jobs/JobSearchView';
 import { LatexStudioModal } from './components/LatexStudioModal';
 import { AgentAutomationView } from './components/AgentAutomationView';
+import { AutoApplyPanel } from './components/AutoApplyPanel';
 import { KanbanCrmView } from './components/KanbanCrmView';
 import { InterviewCockpitModal } from './components/InterviewCockpitModal';
 import { MasterProfileView } from './components/MasterProfileView';
@@ -1067,12 +1068,12 @@ export default function App() {
 
   /** Télécharge le CV du dossier en PDF (rendu Web Chromium ou LaTeX côté serveur). Renvoie false si impossible. */
   const downloadApplicationPdf = async (app: Application): Promise<boolean> => {
-    if (!app.latexResumeCode) return false;
+    if (!app.latexResumeCode && !app.tailoredContent) return false;
     const job = { title: app.jobTitle, company: app.company, skillsRequired: app.skillsRequired || [] };
     const payload = { candidate: profileRef.current, job, template: app.template || preferredTemplate(), tailored: app.tailoredContent };
     // Rendu Web (Chromium), sinon compilation LaTeX du code enregistré
     let res = await apiFetch('/api/cv/pdf', payload);
-    if (!res.ok) res = await apiFetch('/api/latex/compile', { latexCode: app.latexResumeCode });
+    if (!res.ok && app.latexResumeCode) res = await apiFetch('/api/latex/compile', { latexCode: app.latexResumeCode });
     if (!res.ok) return false;
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -1287,10 +1288,17 @@ export default function App() {
             preparedCount={preparedCount}
             jobsCount={jobs.length}
             searchLabel={[lastParams.current.query, jobsMeta.resolvedLocation || lastParams.current.location].filter(Boolean).join(' · ')}
-            queue={applications.filter(a => a.status === 'prepared' && !!a.latexResumeCode)}
+            queue={applications.filter(a => a.status === 'prepared' && !!(a.latexResumeCode || a.tailoredContent))}
             onOpenQueued={handleOpenQueuedApplication}
             onMarkApplied={(app) => handleUpdateAppStatus(app.id, 'applied')}
             onOpenDossier={openLatexForApplication}
+            autoApplyPanel={(
+              <AutoApplyPanel
+                defaultRoles={[userProfile.title, ...(userProfile.targetRoles || [])].filter(Boolean).slice(0, 3) as string[]}
+                defaultLocation={lastParams.current.location || undefined}
+                onNotify={showToast}
+              />
+            )}
           />
         )}
 

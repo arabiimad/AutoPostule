@@ -38,6 +38,8 @@ interface AgentAutomationViewProps {
   onOpenQueued: (app: Application) => void;
   onMarkApplied: (app: Application) => void;
   onOpenDossier: (app: Application) => void;
+  /** Candidature automatique (comptes en ligne) : réglages, messagerie, activité. */
+  autoApplyPanel?: React.ReactNode;
 }
 
 const BATCH_SIZES = [3, 5, 10];
@@ -73,7 +75,8 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
   queue,
   onOpenQueued,
   onMarkApplied,
-  onOpenDossier
+  onOpenDossier,
+  autoApplyPanel
 }) => {
   const [batchSize, setBatchSize] = useState<number>(5);
   const sortedQueue = [...queue].sort((a, b) => (b.matchScore ?? -1) - (a.matchScore ?? -1));
@@ -106,12 +109,13 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
 
       <PageHeader
         title="Assistant de candidatures"
-        subtitle={<>L’assistant choisit les meilleures offres encore non traitées selon vos critères, génère pour chacune un CV et une lettre à partir de votre profil, puis vous ouvre le site de l’entreprise avec la lettre copiée et le CV en PDF. <strong className="text-slate-700">C’est vous qui envoyez la candidature</strong> : rien n’est envoyé à votre place.</>}
+        subtitle={<>L’assistant choisit les meilleures offres selon vos critères et prépare pour chacune un CV et une lettre à partir de votre profil. <strong className="text-slate-700">Candidature automatique</strong> : si vous l’activez, les candidatures partent depuis votre messagerie quand l’offre publie une adresse de candidature. Sinon, et pour LinkedIn, Indeed ou Welcome to the Jungle, <strong className="text-slate-700">c’est vous qui envoyez</strong> : le site s’ouvre avec la lettre copiée et le CV en PDF.</>}
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
 
         <div className="lg:col-span-5 space-y-4">
+          {autoApplyPanel}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 space-y-4">
             <h2 className="flex items-center gap-2 text-[15px] font-semibold text-slate-900">
               <Settings className="h-4 w-4 text-brand-600" aria-hidden="true" />

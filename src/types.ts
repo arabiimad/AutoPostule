@@ -223,6 +223,19 @@ export interface Application {
   versions?: DossierVersion[];
   /** Plateforme d'origine de l'offre (statistiques par source). */
   jobSource?: string;
+  /**
+   * Candidature automatique : état d'exécution (distinct du statut de recrutement `status`).
+   * Écrit par le worker côté serveur ; absent pour les dossiers gérés à la main.
+   */
+  automation?: {
+    state: 'submitted' | 'needs_user' | 'uncertain';
+    reason?: string;
+    channel?: string;
+    target?: string;
+    attemptId?: string;
+    proof?: { provider?: string; messageId?: string | null; acceptedAt?: string; to?: string };
+    updatedAt?: string;
+  };
   /** Date de la première réponse de l'entreprise (entretien, offre ou refus). */
   respondedAt?: string;
   /** Candidature spontanée (entreprise sans offre publiée). */

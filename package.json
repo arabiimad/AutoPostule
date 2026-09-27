@@ -16,6 +16,7 @@
     "check:sources": "node --import tsx scripts/check-sources.ts",
     "test:e2e": "node e2e/run.mjs",
     "test:e2e:worker": "node --import tsx e2e/worker.e2e.ts",
+    "test:e2e:automation": "node --import tsx e2e/automation-ui.e2e.ts",
     "check:ai": "node --import tsx scripts/check-ai.ts",
     "test:supabase": "node e2e/supabase-live.mjs"
   },

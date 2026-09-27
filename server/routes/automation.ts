@@ -12,7 +12,7 @@
 import type { Express } from "express";
 import { createHmac, randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import pg from "pg";
-import { authMiddleware } from "../auth.ts";
+import { authMiddleware, getAuthMode } from "../auth.ts";
 import { createRateLimiter } from "../rateLimit.ts";
 import { PgAutomationStore } from "../automation/pgStore.ts";
 import { policyFromRow } from "../automation/policy.ts";
@@ -106,7 +106,13 @@ export function sanitizePolicy(body: any) {
 // Routes
 // ---------------------------------------------------------------------------
 export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}) {
-  const auth = opts.auth ?? authMiddleware({ optional: true });
+  const verified = opts.auth ?? authMiddleware({ optional: true });
+  // Développement uniquement (AUTH_MODE=off, jamais en production avec des comptes) : utilisateur local désigné
+  const auth = (req: any, res: any, next: any) =>
+    verified(req, res, () => {
+      if (!req.uid && getAuthMode() === "off" && process.env.AUTOMATION_LOCAL_UID) req.uid = process.env.AUTOMATION_LOCAL_UID;
+      next();
+    });
   const limiter = createRateLimiter("automation", 60, 60_000);
 
   // Service configuré ? Compte connecté ?
