@@ -34,11 +34,13 @@ test('migrations : une migration manquante est signalée', { skip: CONN.length ?
   psql(['-d', 'postgres', '-qc', `drop database if exists ${DB}`, '-c', `create database ${DB}`]);
   try {
     const applied = () => MIGRATION_PROBES.map((m) => psql(['-d', DB, '-qtAc', m.sql]) === 't');
-    assert.deepEqual(applied(), [false, false, false, false, false, false]);
+    assert.deepEqual(applied(), [false, false, false, false, false, false, false]);
     for (const f of ['tests/sql/supabase-shim.sql', 'supabase/migrations/001_init.sql', 'supabase/migrations/002_automation.sql', 'supabase/migrations/003_push.sql', 'supabase/migrations/004_sync.sql', 'supabase/migrations/005_billing.sql']) psql(['-d', DB, '-v', 'ON_ERROR_STOP=1', '-q', '-f', f]);
-    assert.deepEqual(applied(), [true, true, true, true, true, false], '006 non appliquée');
+    assert.deepEqual(applied(), [true, true, true, true, true, false, false], '006 non appliquée');
     psql(['-d', DB, '-v', 'ON_ERROR_STOP=1', '-q', '-f', 'supabase/migrations/006_lba_channel.sql']);
-    assert.deepEqual(applied(), [true, true, true, true, true, true]);
+    assert.deepEqual(applied(), [true, true, true, true, true, true, false], '007 non appliquée');
+    psql(['-d', DB, '-v', 'ON_ERROR_STOP=1', '-q', '-f', 'supabase/migrations/007_offer_index.sql']);
+    assert.deepEqual(applied(), [true, true, true, true, true, true, true]);
   } finally {
     psql(['-d', 'postgres', '-qc', `drop database if exists ${DB} with (force)`]);
   }

@@ -2,7 +2,7 @@
  * Contrôle avant mise en production (aucune valeur secrète affichée, aucun e-mail ni candidature envoyés).
  *   npm run check:prod
  * 1. Variables : présence et format (clé de chiffrement, VAPID, adresses https…).
- * 2. Base (AUTOMATION_DATABASE_URL) : migrations 001 à 006 appliquées.
+ * 2. Base (AUTOMATION_DATABASE_URL) : migrations 001 à 007 appliquées.
  * 3. Supabase : API joignable avec la clé publique.
  * Affiche ensuite les adresses de retour OAuth à déclarer chez Google et Microsoft.
  */
@@ -72,7 +72,8 @@ export const MIGRATION_PROBES: { file: string; sql: string }[] = [
   { file: "003_push.sql", sql: "select to_regclass('public.push_subscriptions') is not null" },
   { file: "004_sync.sql", sql: "select to_regproc('public.save_profile') is not null and to_regproc('public.patch_application') is not null" },
   { file: "005_billing.sql", sql: "select to_regclass('public.stripe_events') is not null" },
-  { file: "006_lba_channel.sql", sql: "select coalesce(bool_or(pg_get_constraintdef(oid) like '%lba%'), false) from pg_constraint where conname = 'application_attempts_channel_check'" }
+  { file: "006_lba_channel.sql", sql: "select coalesce(bool_or(pg_get_constraintdef(oid) like '%lba%'), false) from pg_constraint where conname = 'application_attempts_channel_check'" },
+  { file: "007_offer_index.sql", sql: "select to_regclass('public.ingest_state') is not null and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'job_offers' and column_name = 'last_seen_at')" }
 ];
 
 async function checkDatabase(url: string): Promise<Finding[]> {

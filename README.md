@@ -76,7 +76,7 @@ Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accè
 Comptes (e-mail + mot de passe, Google en option), profils et candidatures sont stockés dans Supabase (PostgreSQL, région UE). Chaque utilisateur ne voit que ses données (règles RLS). Sans configuration, l'application fonctionne en session locale (données dans le navigateur).
 
 1. Créez un projet sur supabase.com (région Europe).
-2. SQL Editor : exécutez dans l’ordre les migrations `supabase/migrations/001_init.sql` à `006_lba_channel.sql` (tables, règles RLS, file d’auto-candidature, notifications, synchronisation, facturation).
+2. SQL Editor : exécutez dans l’ordre les migrations `supabase/migrations/001_init.sql` à `007_offer_index.sql` (tables, règles RLS, file d’auto-candidature, notifications, synchronisation, facturation).
 3. `.env` : `SUPABASE_URL`, `SUPABASE_ANON_KEY` (clé publishable), `SUPABASE_SERVICE_ROLE_KEY` (serveur uniquement, jamais dans le navigateur), et pour l'interface `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
 4. Authentication → URL Configuration : « Site URL » = l'adresse publique de l'application (liens de confirmation et de réinitialisation).
 5. Production : configurez un SMTP (Authentication → Emails) ; le service d'e-mail par défaut de Supabase est limité à quelques envois par heure.
@@ -115,6 +115,15 @@ La recherche planifiée du worker ne se limite pas aux sites d'emploi (`server/d
 Canaux d'envoi ajoutés :
 - **La bonne alternance** : API officielle `POST /job/v1/apply` (migration `006_lba_channel.sql`). Mêmes garanties que l'email : réservation, pause revérifiée, preuve, résultat incertain jamais renvoyé.
 - **Adresse de candidature France Travail** (`contact.courriel` de l'offre) : envoi par email depuis la boîte du candidat.
+
+## Base d'offres : collecte continue et mesure des canaux
+
+Le worker alimente la table `job_offers` (migration `007_offer_index.sql`) en continu, au lieu d'interroger les sources à chaque recherche (`server/ingest/`) :
+
+- **France Travail, y compris les offres de ses sites partenaires** : tous les départements (métropole, Corse, outre-mer). L'API renvoie au plus 3 150 résultats par recherche : quand un département dépasse, la période de création est découpée en deux, récursivement. Nouveautés toutes les heures (`INGEST_FT_EVERY_MINUTES`), balayage complet une fois par jour (`INGEST_FT_FULL_EVERY_HOURS`) : les offres qui ne sont plus en ligne deviennent inactives. Un verrou PostgreSQL garantit un seul collecteur, même avec plusieurs workers. Activation : `INGEST_FT=on`.
+- Chaque offre reçoit : code métier ROME, département, site partenaire d'origine, empreinte (doublons entre sources), canal de candidature et famille de la page « Postuler » (Workday, Taleez, Indeed…), recherche plein texte en français.
+- `npm run ingest:ft [-- --full --departements 13,84]` : collecte manuelle.
+- `npm run measure:channels` : **mesure en lecture seule** de la répartition des canaux de candidature (échantillon en direct de l'API France Travail, ou `-- --db` sur la base) : part déjà envoyable automatiquement, logiciels de recrutement à connecter ensuite (par volume), sites inconnus, partenaires d'origine. `-- --json rapport.json` pour le détail.
 
 ## Mise en production
 

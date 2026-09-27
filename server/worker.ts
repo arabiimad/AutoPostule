@@ -7,6 +7,9 @@
  * GEMINI_API_KEY, clés des sources d'offres, GOOGLE_CLIENT_ID/SECRET, MICROSOFT_CLIENT_ID/SECRET.
  * Réglages : AUTOMATION_POLL_SECONDS (défaut 15), AUTOMATION_SEARCH_EVERY_HOURS (défaut 12 : deux recherches par jour),
  * AUTOMATION_CONCURRENCY (défaut 1 envoi à la fois).
+ * Collecte des offres France Travail (base d'offres, migration 007) : INGEST_FT=on,
+ * INGEST_FT_EVERY_MINUTES (défaut 60, nouveautés), INGEST_FT_FULL_EVERY_HOURS (défaut 24, balayage complet),
+ * FT_SYNC_RPS (appels par seconde, défaut 3).
  */
 import dotenv from "dotenv";
 import os from "node:os";
@@ -16,6 +19,8 @@ import { runOnce } from "./automation/worker.ts";
 import { closeWebPdf } from "./pdf.ts";
 import { logEvent } from "./log.ts";
 import { captureError, initMonitoring } from "./monitoring.ts";
+import { PgOfferStore } from "./ingest/offerStore.ts";
+import { syncFranceTravail } from "./ingest/franceTravail.ts";
 
 dotenv.config();
 
@@ -36,6 +41,37 @@ const concurrency = Math.max(1, Math.min(4, Number(process.env.AUTOMATION_CONCUR
 const deps = realDeps(store, workerId);
 
 let stopping = false;
+
+// Collecte continue des offres (en arrière-plan : ne ralentit jamais les envois)
+const ingestEnabled = process.env.INGEST_FT === "on" && !!process.env.FT_CLIENT_ID && !!process.env.FT_CLIENT_SECRET;
+const offerStore = ingestEnabled ? new PgOfferStore(store.pool) : null;
+const ingestEveryMs = Math.max(15, Number(process.env.INGEST_FT_EVERY_MINUTES) || 60) * 60_000;
+const fullEveryMs = Math.max(6, Number(process.env.INGEST_FT_FULL_EVERY_HOURS) || 24) * 3600_000;
+let ingesting = false;
+let lastIngest = 0;
+let lastFullIngest = 0;
+
+function maybeIngest() {
+  if (!offerStore || ingesting || stopping || Date.now() - lastIngest < ingestEveryMs) return;
+  ingesting = true;
+  lastIngest = Date.now();
+  const mode = Date.now() - lastFullIngest >= fullEveryMs ? "full" : "incremental";
+  // Verrou PostgreSQL : un seul worker collecte, même à plusieurs instances
+  offerStore
+    .withLock("ingest:france-travail", () => syncFranceTravail(offerStore, {
+      mode,
+      rps: Number(process.env.FT_SYNC_RPS) || undefined,
+      log: (event, data) => { if (event.endsWith("error")) logEvent("warn", event, data); }
+    }))
+    .then((summary) => {
+      if (!summary) return;
+      if (mode === "full") lastFullIngest = Date.now();
+      const { errors, ...rest } = summary;
+      logEvent(errors.length ? "warn" : "info", "ingest_france_travail", { ...rest, errors: errors.length, firstError: errors[0]?.message });
+    })
+    .catch((e) => logEvent("error", "ingest_france_travail_failed", { message: String(e?.message || e).slice(0, 300) }))
+    .finally(() => { ingesting = false; });
+}
 let lastMaintenance = 0;
 let lastPurge = 0;
 
@@ -61,6 +97,7 @@ async function tick() {
     const purged = await store!.purgeOld(Number(process.env.AUTOMATION_PROOF_DAYS) || 180);
     logEvent("info", "automation_purge", purged);
   }
+  maybeIngest();
   // Traite tant qu'il y a du travail, puis attend
   while (!stopping && (await runOnce(deps, { limit: concurrency, leaseSeconds: 600 })) > 0) { /* lot suivant */ }
 }

@@ -385,6 +385,38 @@ async function getFtToken(): Promise<string> {
   return ftToken.value;
 }
 
+/**
+ * Appel direct de l'API de recherche France Travail, sans cache (collecte continue, voir server/ingest).
+ * Renvoie aussi le nombre total de résultats lu dans l'en-tête Content-Range (« offres 0-149/5234 »).
+ */
+export async function ftSearchRaw(qs: URLSearchParams): Promise<{ status: number; offers: any[]; total: number | null }> {
+  const url = `${FT_SEARCH_URL}?${qs.toString()}`;
+  void countApiCall("franceTravail");
+  let res = await fetchImpl(url, { headers: { Authorization: `Bearer ${await getFtToken()}`, Accept: "application/json" } });
+  if (res.status === 401) {
+    ftToken = null;
+    res = await fetchImpl(url, { headers: { Authorization: `Bearer ${await getFtToken()}`, Accept: "application/json" } });
+  }
+  if (res.status === 204) return { status: 204, offers: [], total: 0 };
+  if (!res.ok && res.status !== 206) return { status: res.status, offers: [], total: null };
+  const range = String(res.headers?.get?.("content-range") || "");
+  const m = range.match(/\/(\d+)\s*$/);
+  const data = await res.json();
+  const offers = Array.isArray(data?.resultats) ? data.resultats : [];
+  return { status: res.status, offers, total: m ? Number(m[1]) : offers.length };
+}
+
+/** Département d'une offre France Travail (« 13 - Marseille », code commune INSEE). */
+export function ftDepartement(o: any): string | undefined {
+  const lib = String(o?.lieuTravail?.libelle || "");
+  const fromLabel = lib.match(/^\s*(2A|2B|97\d|\d{2})\s*-/i)?.[1];
+  if (fromLabel) return fromLabel.toUpperCase();
+  const insee = String(o?.lieuTravail?.commune || "");
+  if (/^97\d{3}$/.test(insee)) return insee.slice(0, 3);
+  if (/^(2A|2B|\d{2})\d{3}$/i.test(insee)) return insee.slice(0, 2).toUpperCase();
+  return undefined;
+}
+
 const FT_CONTRACT: Record<string, ContractType> = { CDI: "cdi", CDD: "cdd", MIS: "cdd", SAI: "cdd", LIB: "freelance", FRA: "freelance" };
 
 export function normalizeFtJob(o: any): JobOffer | null {
@@ -416,7 +448,11 @@ export function normalizeFtJob(o: any): JobOffer | null {
     companySector: o.secteurActiviteLibelle || undefined,
     companySize: o.trancheEffectifEtab || undefined,
     companyWebsite: o.entreprise?.url || undefined,
-    companyLogo: o.entreprise?.logo || undefined
+    companyLogo: o.entreprise?.logo || undefined,
+    // Collecte : code métier, département, site partenaire d'origine (offres partenaires de France Travail)
+    ...(o.romeCode ? { romeCode: String(o.romeCode) } : {}),
+    ...(ftDepartement(o) ? { departement: ftDepartement(o) } : {}),
+    ...(o.origineOffre?.partenaires?.[0]?.nom ? { sourcePartner: String(o.origineOffre.partenaires[0].nom) } : {})
   };
 }
 

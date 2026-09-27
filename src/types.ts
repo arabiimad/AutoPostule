@@ -155,6 +155,12 @@ export interface JobOffer {
   contactEmail?: string;
   /** Identifiant de candidature La bonne alternance (envoi direct par leur API officielle). */
   lbaRecipientId?: string;
+  /** Code métier ROME (France Travail). */
+  romeCode?: string;
+  /** Département du lieu de travail (« 13 », « 2A », « 971 »). */
+  departement?: string;
+  /** Site partenaire d'origine (offres partenaires diffusées par France Travail). */
+  sourcePartner?: string;
   /** Publication d'un recruteur (LinkedIn, site…) et non annonce structurée : à vérifier. */
   isPost?: boolean;
   /** Extrait de la publication d'origine. */
