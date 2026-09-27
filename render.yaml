@@ -17,6 +17,7 @@ services:
       - { key: GEMINI_API_KEY, sync: false }
       - { key: AUTOMATION_DATABASE_URL, sync: false }
       - { key: AUTOMATION_TOKEN_KEY, sync: false }
+      - { key: JOBS_INDEX, value: "on" }
       - { key: GOOGLE_CLIENT_ID, sync: false }
       - { key: GOOGLE_CLIENT_SECRET, sync: false }
       - { key: MICROSOFT_CLIENT_ID, sync: false }
@@ -33,6 +34,7 @@ services:
     envVars:
       - { key: NODE_ENV, value: production }
       - { key: INGEST_FT, value: "on" }
+      - { key: JOBS_INDEX, value: "on" }
       - { key: AUTOMATION_DATABASE_URL, sync: false }
       - { key: AUTOMATION_TOKEN_KEY, sync: false }
       - { key: GEMINI_API_KEY, sync: false }

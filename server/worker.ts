@@ -21,6 +21,7 @@ import { logEvent } from "./log.ts";
 import { captureError, initMonitoring } from "./monitoring.ts";
 import { PgOfferStore } from "./ingest/offerStore.ts";
 import { syncFranceTravail } from "./ingest/franceTravail.ts";
+import { enableOfferIndexFromEnv } from "./ingest/offerSearch.ts";
 
 dotenv.config();
 
@@ -104,6 +105,8 @@ async function tick() {
 
 async function loop() {
   await initMonitoring().catch(() => {});
+  // Recherches planifiées de l'agent : partie France Travail lue dans la base d'offres (JOBS_INDEX=on)
+  await enableOfferIndexFromEnv().catch(() => false);
   logEvent("info", "automation_worker_started", { workerId, pollMs, searchEveryHours, concurrency });
   while (!stopping) {
     try {
