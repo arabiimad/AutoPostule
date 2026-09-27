@@ -12,6 +12,7 @@ import { registerLatexRoutes } from "./routes/latex.ts";
 import { registerInterviewRoutes } from "./routes/interview.ts";
 import { registerAccountRoutes, registerAccountApiRoutes } from "./routes/account.ts";
 import { registerToolRoutes } from "./routes/tools.ts";
+import { registerAutomationRoutes } from "./routes/automation.ts";
 
 /** Application Express (API seulement) : utilisée par server.ts et par les tests. */
 export function createApp(): Express {
@@ -55,6 +56,7 @@ export function createApp(): Express {
   registerInterviewRoutes(app);
   registerAccountApiRoutes(app);
   registerToolRoutes(app);
+  registerAutomationRoutes(app);
 
   // Erreurs non gérées sur /api
   app.use("/api", (err: any, req: any, res: any, next: any) => {

@@ -23,8 +23,10 @@ create table if not exists public.automation_policies (
   channels text[] not null default '{email}' check (channels <@ array['email', 'form']::text[]),
   daily_limit integer not null default 5 check (daily_limit between 1 and 20),
   follow_ups boolean not null default false,       -- relances automatiques désactivées par défaut
+  consented_at timestamptz,                        -- consentement explicite à l'envoi automatique
   updated_at timestamptz not null default now()
 );
+alter table public.automation_policies add column if not exists consented_at timestamptz;
 
 -- Réponses personnelles aux questions des formulaires (jamais inventées par l'IA)
 create table if not exists public.personal_answers (
