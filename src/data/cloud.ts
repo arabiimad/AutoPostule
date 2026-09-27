@@ -164,7 +164,12 @@ export function authErrorMessage(err: any): string {
   if (code === 'same_password' || /different from the old password/i.test(msg)) return 'Choisissez un mot de passe différent de l’ancien.';
   if (code === 'session_not_found' || code === 'session_expired' || /auth session missing/i.test(msg)) return 'Le lien de réinitialisation a expiré : demandez-en un nouveau.';
   if (code === 'weak_password' || /password should be/i.test(msg)) return 'Mot de passe trop faible : 8 caractères minimum, avec lettres et chiffres.';
-  if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit' || /rate limit/i.test(msg)) return 'Trop de tentatives : patientez quelques minutes avant de réessayer.';
+  // Même adresse redemandée trop vite (Supabase impose un délai entre deux e-mails) : délai exact
+  const wait = msg.match(/after (\d+) seconds?/i);
+  if (wait) return `Un e-mail vient d’être envoyé à cette adresse : patientez ${wait[1]} secondes avant d’en redemander un (pensez aux indésirables).`;
+  // Quota d'e-mails du service de comptes atteint (limité par heure)
+  if (code === 'over_email_send_rate_limit' || /email rate limit/i.test(msg)) return 'Trop d’e-mails envoyés récemment : réessayez dans une heure. Si vous avez déjà reçu un lien, utilisez-le (pensez aux indésirables).';
+  if (code === 'over_request_rate_limit' || /rate limit/i.test(msg)) return 'Trop de tentatives : patientez quelques minutes avant de réessayer.';
   if (code === 'validation_failed' || /invalid.*email|email.*invalid/i.test(msg)) return 'Adresse e-mail invalide.';
   if (/provider is not enabled/i.test(msg)) return 'La connexion Google n’est pas encore activée : utilisez votre e-mail.';
   if (/fetch|network/i.test(msg)) return 'Connexion au service de comptes impossible. Vérifiez votre connexion Internet.';
