@@ -108,7 +108,9 @@ export class PgOfferSearch {
 export async function enableOfferIndexFromEnv(env = process.env): Promise<boolean> {
   const idx = PgOfferSearch.fromEnv(env);
   if (!idx) return false;
-  const { setOfferIndex } = await import("../jobSources.ts");
+  const { setOfferIndex, setSiteIndex } = await import("../jobSources.ts");
   setOfferIndex(idx.search);
+  // Même base, offres des sites d'employeurs (source « Sites carrière »)
+  setSiteIndex(new PgOfferSearch(idx.pool, "Sites carrière").search);
   return true;
 }

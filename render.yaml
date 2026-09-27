@@ -34,6 +34,7 @@ services:
     envVars:
       - { key: NODE_ENV, value: production }
       - { key: INGEST_FT, value: "on" }
+      - { key: INGEST_SITES, value: "on" }
       - { key: JOBS_INDEX, value: "on" }
       - { key: AUTOMATION_DATABASE_URL, sync: false }
       - { key: AUTOMATION_TOKEN_KEY, sync: false }

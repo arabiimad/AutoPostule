@@ -43,6 +43,8 @@ export interface OfferStore {
   upsertOffers(rows: OfferRow[], seenAt: string): Promise<{ inserted: number; updated: number }>;
   /** Offres d'une source et d'un département non revues depuis `before` : retirées (inactives). */
   deactivateUnseen(source: string, departement: string, before: string): Promise<number>;
+  /** Offres d'un site d'entreprise (« exemple.fr ») non revues depuis `before` : retirées. */
+  deactivateUnseenSite(source: string, site: string, before: string): Promise<number>;
   getState(source: string, partition: string): Promise<IngestState | null>;
   saveState(state: IngestState): Promise<void>;
   channelStats(filter?: { source?: string }): Promise<ChannelStat[]>;
@@ -109,6 +111,16 @@ export class MemoryOfferStore implements OfferStore {
     let n = 0;
     for (const r of this.rows.values()) {
       if (r.active && r.source === source && r.departement === departement && r.lastSeenAt < before) {
+        r.active = false;
+        n++;
+      }
+    }
+    return n;
+  }
+  async deactivateUnseenSite(source: string, site: string, before: string) {
+    let n = 0;
+    for (const r of this.rows.values()) {
+      if (r.active && r.source === source && r.sourceRef.startsWith(`${site}:`) && r.lastSeenAt < before) {
         r.active = false;
         n++;
       }
@@ -186,6 +198,30 @@ export class PgOfferStore implements OfferStore {
       [source, departement, before]
     );
     return rowCount || 0;
+  }
+
+  async deactivateUnseenSite(source: string, site: string, before: string) {
+    const { rowCount } = await this.pool.query(
+      `update public.job_offers set active = false
+       where active and source = $1 and left(source_ref, length($2) + 1) = $2 || ':' and last_seen_at < $3`,
+      [source, site, before]
+    );
+    return rowCount || 0;
+  }
+
+  /**
+   * Adresses de sites d'employeurs rencontrées dans les offres actives (site de l'entreprise, page de candidature
+   * hébergée chez elle), les plus fréquentes d'abord.
+   */
+  async employerUrls(limit = 5000): Promise<{ url: string; offers: number }[]> {
+    const { rows } = await this.pool.query(
+      `select url, count(*)::int as offers from (
+         select coalesce(nullif(data->>'companyWebsite', ''), case when apply_host like 'autre:%' then offer_url end) as url
+         from public.job_offers where active and source <> $1
+       ) t where url is not null group by url order by offers desc limit $2`,
+      ["Sites carrière", limit]
+    );
+    return rows;
   }
 
   async getState(source: string, partition: string): Promise<IngestState | null> {

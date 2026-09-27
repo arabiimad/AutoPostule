@@ -10,6 +10,8 @@
  * Collecte des offres France Travail (base d'offres, migration 007) : INGEST_FT=on,
  * INGEST_FT_EVERY_MINUTES (défaut 60, nouveautés), INGEST_FT_FULL_EVERY_HOURS (défaut 24, balayage complet),
  * FT_SYNC_RPS (appels par seconde, défaut 3).
+ * Collecte des offres publiées sur les sites des employeurs (JobPosting) : INGEST_SITES=on,
+ * INGEST_SITES_EVERY_MINUTES (défaut 60), INGEST_SITES_PER_RUN (sites visités par collecte, défaut 40), CAREER_SITES.
  */
 import dotenv from "dotenv";
 import os from "node:os";
@@ -22,6 +24,8 @@ import { captureError, initMonitoring } from "./monitoring.ts";
 import { PgOfferStore } from "./ingest/offerStore.ts";
 import { syncFranceTravail } from "./ingest/franceTravail.ts";
 import { enableOfferIndexFromEnv } from "./ingest/offerSearch.ts";
+import { siteSeeds, syncCareerSites } from "./ingest/careerSites.ts";
+import { learnBoards } from "./discovery/discover.ts";
 
 dotenv.config();
 
@@ -73,6 +77,33 @@ function maybeIngest() {
     .catch((e) => logEvent("error", "ingest_france_travail_failed", { message: String(e?.message || e).slice(0, 300) }))
     .finally(() => { ingesting = false; });
 }
+
+// Sites des employeurs : offres JobPosting (robots.txt respecté, un site à la fois)
+const sitesStore = process.env.INGEST_SITES === "on" ? new PgOfferStore(store.pool) : null;
+const sitesEveryMs = Math.max(15, Number(process.env.INGEST_SITES_EVERY_MINUTES) || 60) * 60_000;
+let crawlingSites = false;
+let lastSites = 0;
+
+function maybeCrawlSites() {
+  if (!sitesStore || crawlingSites || stopping || Date.now() - lastSites < sitesEveryMs) return;
+  crawlingSites = true;
+  lastSites = Date.now();
+  sitesStore
+    .withLock("ingest:career-sites", async () => {
+      const seeds = siteSeeds(await sitesStore.employerUrls());
+      const summary = await syncCareerSites(sitesStore, seeds, { maxSites: Number(process.env.INGEST_SITES_PER_RUN) || 40 });
+      // Pages carrière Greenhouse, Lever… trouvées sur les sites : relues par la recherche de l'agent
+      if (summary.boards.length) await learnBoards(summary.boards);
+      return { ...summary, candidates: seeds.length };
+    })
+    .then((summary) => {
+      if (!summary) return;
+      const { errors, boards, ...rest } = summary;
+      logEvent(errors.length ? "warn" : "info", "ingest_career_sites", { ...rest, boards: boards.length, errors: errors.length, firstError: errors[0]?.message });
+    })
+    .catch((e) => logEvent("error", "ingest_career_sites_failed", { message: String(e?.message || e).slice(0, 300) }))
+    .finally(() => { crawlingSites = false; });
+}
 let lastMaintenance = 0;
 let lastPurge = 0;
 
@@ -99,6 +130,7 @@ async function tick() {
     logEvent("info", "automation_purge", purged);
   }
   maybeIngest();
+  maybeCrawlSites();
   // Traite tant qu'il y a du travail, puis attend
   while (!stopping && (await runOnce(deps, { limit: concurrency, leaseSeconds: 600 })) > 0) { /* lot suivant */ }
 }
