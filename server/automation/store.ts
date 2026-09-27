@@ -33,6 +33,48 @@ export interface TaskQueue {
   resume(id: string, uid: string, resolution: Resolution): Promise<Task>;
 }
 
+/** Boîte mail connectée (jeton de rafraîchissement OAuth chiffré). */
+export interface MailConnection {
+  provider: "google" | "microsoft";
+  email: string;
+  secret: string;
+  status: "active" | "revoked";
+  connectedAt: string;
+  updatedAt: string;
+}
+
+/** Offre trouvée par la découverte automatique, listée à l'utilisateur. */
+export interface DiscoveredOffer {
+  /** sha1 de l'offre (entreprise + intitulé + lieu) : la même offre vue sur plusieurs sources reste unique. */
+  id: string;
+  job: any;
+  /** Compatibilité avec le profil (0-100), null si l'offre ne cite aucune compétence. */
+  score: number | null;
+  matchedKeywords: string[];
+  missingKeywords: string[];
+  status: "new" | "seen" | "queued" | "dismissed";
+  taskId?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface DiscoveryState {
+  enabled: boolean;
+  intervalHours: number;
+  nextRunAt: string;
+  lastRunAt?: string;
+  lastStats?: Record<string, unknown>;
+  lastError?: string;
+}
+
+export interface KnownBoard {
+  id: string;
+  ats: string;
+  token: string;
+  region?: string;
+  lastSeenAt: string;
+}
+
 export interface AutomationStore {
   readonly kind: "memory" | "firestore";
   queue: TaskQueue;
@@ -51,6 +93,19 @@ export interface AutomationStore {
   listDeviceTokens(uid: string): Promise<string[]>;
   saveDeviceToken(uid: string, token: string): Promise<void>;
   deleteDeviceToken(uid: string, token: string): Promise<void>;
+  getMailConnection(uid: string, provider: MailConnection["provider"]): Promise<MailConnection | null>;
+  saveMailConnection(uid: string, conn: MailConnection): Promise<void>;
+  deleteMailConnection(uid: string, provider: MailConnection["provider"]): Promise<void>;
+  upsertOffers(uid: string, offers: DiscoveredOffer[]): Promise<{ added: number }>;
+  listOffers(uid: string, limit?: number): Promise<DiscoveredOffer[]>;
+  getOffer(uid: string, id: string): Promise<DiscoveredOffer | null>;
+  updateOffer(uid: string, id: string, patch: Partial<Pick<DiscoveredOffer, "status" | "taskId">>): Promise<void>;
+  getDiscovery(uid: string): Promise<DiscoveryState | null>;
+  saveDiscovery(uid: string, state: DiscoveryState): Promise<void>;
+  /** Réserve les utilisateurs dont la découverte est due (repousse leur prochain passage de leaseMs). */
+  claimDueDiscoveries(limit: number, leaseMs: number): Promise<string[]>;
+  saveBoards(boards: Omit<KnownBoard, "lastSeenAt">[]): Promise<void>;
+  listBoards(limit: number): Promise<KnownBoard[]>;
   /** Anti-spam des notifications : renvoie true si la clé n'a pas été utilisée depuis `windowMs`. */
   acquireNotificationSlot(uid: string, key: string, windowMs: number): Promise<boolean>;
 }
@@ -270,6 +325,10 @@ export class MemoryAutomationStore implements AutomationStore {
   private submissions = new Map<string, Submission[]>();
   private devices = new Map<string, Set<string>>();
   private slots = new Map<string, number>();
+  private mail = new Map<string, MailConnection>();
+  private offers = new Map<string, Map<string, DiscoveredOffer>>();
+  private discovery = new Map<string, DiscoveryState>();
+  private boards = new Map<string, KnownBoard>();
 
   private bucket<T>(map: Map<string, Map<string, T>>, uid: string) {
     let b = map.get(uid);
@@ -322,6 +381,57 @@ export class MemoryAutomationStore implements AutomationStore {
   }
   async deleteDeviceToken(uid: string, token: string) {
     this.devices.get(uid)?.delete(token);
+  }
+  async getMailConnection(uid: string, provider: MailConnection["provider"]) {
+    const c = this.mail.get(`${uid}:${provider}`);
+    return c ? { ...c } : null;
+  }
+  async saveMailConnection(uid: string, conn: MailConnection) {
+    this.mail.set(`${uid}:${conn.provider}`, { ...conn });
+  }
+  async deleteMailConnection(uid: string, provider: MailConnection["provider"]) {
+    this.mail.delete(`${uid}:${provider}`);
+  }
+  async upsertOffers(uid: string, offers: DiscoveredOffer[]) {
+    const b = this.bucket(this.offers, uid);
+    let added = 0;
+    for (const o of offers) {
+      const prev = b.get(o.id);
+      if (!prev) added++;
+      b.set(o.id, prev ? { ...o, status: prev.status, taskId: prev.taskId, firstSeenAt: prev.firstSeenAt } : { ...o });
+    }
+    return { added };
+  }
+  async listOffers(uid: string, limit = 300) {
+    return [...this.bucket(this.offers, uid).values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)).slice(0, limit).map((o) => ({ ...o }));
+  }
+  async getOffer(uid: string, id: string) {
+    const o = this.bucket(this.offers, uid).get(id);
+    return o ? { ...o } : null;
+  }
+  async updateOffer(uid: string, id: string, patch: Partial<Pick<DiscoveredOffer, "status" | "taskId">>) {
+    const b = this.bucket(this.offers, uid);
+    const o = b.get(id);
+    if (o) b.set(id, { ...o, ...patch });
+  }
+  async getDiscovery(uid: string) {
+    const d = this.discovery.get(uid);
+    return d ? { ...d } : null;
+  }
+  async saveDiscovery(uid: string, state: DiscoveryState) {
+    this.discovery.set(uid, { ...state });
+  }
+  async claimDueDiscoveries(limit: number, leaseMs: number) {
+    const now = nowIso();
+    const due = [...this.discovery.entries()].filter(([, d]) => d.enabled && d.nextRunAt <= now).sort((a, b) => a[1].nextRunAt.localeCompare(b[1].nextRunAt)).slice(0, limit);
+    for (const [uid, d] of due) this.discovery.set(uid, { ...d, nextRunAt: new Date(Date.now() + leaseMs).toISOString() });
+    return due.map(([uid]) => uid);
+  }
+  async saveBoards(boards: Omit<KnownBoard, "lastSeenAt">[]) {
+    for (const b of boards) this.boards.set(b.id, { ...b, lastSeenAt: nowIso() });
+  }
+  async listBoards(limit: number) {
+    return [...this.boards.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)).slice(0, limit);
   }
   async acquireNotificationSlot(uid: string, key: string, windowMs: number) {
     const k = `${uid}:${key}`;

@@ -71,7 +71,7 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
     <div>
 
       <PageHeader
-        title="Assistant de candidatures"
+        title="Assistant manuel"
         subtitle={<>À chaque clic, l’assistant choisit la meilleure offre encore non traitée selon vos critères, génère un CV LaTeX et une lettre à partir de votre profil, puis ouvre le site de l’entreprise. <strong className="text-slate-700">C’est vous qui envoyez la candidature</strong> : rien n’est envoyé à votre place.</>}
       />
 

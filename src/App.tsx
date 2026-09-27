@@ -18,6 +18,7 @@ import { Header } from './components/Header';
 import { JobSearchView } from './components/jobs/JobSearchView';
 import { LatexStudioModal } from './components/LatexStudioModal';
 import { AgentAutomationView } from './components/AgentAutomationView';
+import { AutoAgentPanel } from './components/AutoAgentPanel';
 import { KanbanCrmView } from './components/KanbanCrmView';
 import { InterviewCockpitModal } from './components/InterviewCockpitModal';
 import { MasterProfileView } from './components/MasterProfileView';
@@ -906,6 +907,11 @@ export default function App() {
 
         {/* SUB-VIEW 2: AGENT AUTOMATION (LE PILOTE AUTOMATIQUE) */}
         {currentTab === 'agent' && (
+          <>
+          <AutoAgentPanel
+            userProfile={userProfile}
+            onSaveSettings={(patch) => { handleSaveProfile({ ...userProfile, ...patch }, { silent: true }).catch(() => {}); }}
+          />
           <AgentAutomationView
             userProfile={userProfile}
             onSaveSettings={(patch) => { handleSaveProfile({ ...userProfile, ...patch }, { silent: true }).catch(() => {}); }}
@@ -915,6 +921,7 @@ export default function App() {
             onGoToInterviews={() => setCurrentTab('interview')}
             preparedCount={preparedCount}
           />
+          </>
         )}
 
         {/* SUB-VIEW 3: STUDIO LATEX & OVERLEAF (DIRECT VIEW) */}

@@ -88,3 +88,46 @@ test('API : connexion exigée hors mode développement', async () => {
     srv.close();
   }
 });
+
+test('API : offres trouvées triées par compatibilité, candidature en un clic, masquage', async () => {
+  const now = new Date().toISOString();
+  const mk = (id: string, score: number | null, company: string) => ({
+    id, score, matchedKeywords: [], missingKeywords: [], status: 'new' as const, firstSeenAt: now, lastSeenAt: now,
+    job: { title: 'Dev', company, location: 'Lyon', applyUrl: 'https://x.fr', publishedAt: now }
+  });
+  await store.upsertOffers('alice', [mk('o1', 40, 'Basse'), mk('o2', null, 'Inconnue'), mk('o3', 90, 'Haute')]);
+  const list = await call('GET', '/offers');
+  assert.deepEqual(list.body.offers.map((o: any) => o.job.company), ['Haute', 'Basse', 'Inconnue']);
+  assert.equal(list.body.discovery.enabled, true, 'utilisateur inscrit à la découverte régulière');
+  assert.equal((await call('GET', '/offers?minScore=50')).body.offers.length, 1);
+  assert.equal((await call('GET', '/offers', undefined, 'bob')).body.offers.length, 0);
+
+  const applied = await call('POST', '/offers/o3/apply');
+  assert.equal(applied.status, 201);
+  assert.equal((await store.getOffer('alice', 'o3'))?.status, 'queued');
+  assert.equal((await call('POST', '/offers/o3/apply', {}, 'bob')).status, 404);
+
+  await call('POST', '/offers/o1/dismiss');
+  assert.ok(!(await call('GET', '/offers')).body.offers.some((o: any) => o.id === 'o1'));
+
+  const d = await call('PUT', '/discovery', { enabled: false, intervalHours: 1 });
+  assert.equal(d.body.discovery.enabled, false);
+  assert.equal(d.body.discovery.intervalHours, 2);
+});
+
+test('API : découverte manuelle limitée à une fois toutes les 10 minutes', async () => {
+  const first = await call('POST', '/discovery/run', { candidate: { title: 'Développeur web', location: 'Lyon', skills: [] } }, 'carol');
+  assert.equal(first.status, 200);
+  assert.equal(first.body.run.found, 0, 'aucune source configurée dans ce test');
+  assert.equal((await call('POST', '/discovery/run', {}, 'carol')).status, 429);
+});
+
+test('API : boîte mail — Gmail non configuré signalé proprement', async () => {
+  const m = await call('GET', '/mail');
+  assert.equal(m.body.gmailAvailable, false);
+  assert.equal(m.body.google, null);
+  assert.equal((await call('GET', '/mail/google/connect')).status, 503);
+  const res = await fetch(`${base}/mail/google/callback?code=x&state=y`, { redirect: 'manual' });
+  assert.equal(res.status, 302);
+  assert.match(res.headers.get('location') || '', /mail=error/);
+});

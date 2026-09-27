@@ -9,6 +9,10 @@
  *   users/{uid}/submissions/{id}
  *   users/{uid}/devices/{sha1(token)}
  *   users/{uid}/automation/notify_{key}
+ *   users/{uid}/automation/mail_{google|microsoft}  (jeton OAuth chiffré)
+ *   users/{uid}/automation/discovery  (planning de la découverte d'offres)
+ *   users/{uid}/offers/{id}  (offres trouvées pour l'utilisateur)
+ *   ats_boards/{id}  (pages carrière connues, partagées entre utilisateurs)
  *   automation_dedupe/{sha1(uid|offre)}  (une seule candidature par offre)
  *
  * La base du projet est en édition Enterprise : aucun index n'est obligatoire. En édition Standard,
@@ -19,7 +23,7 @@
 import { createHash } from "node:crypto";
 import {
   ACTIVE_STATUSES, DEFAULT_SETTINGS, TaskStateError, assertLease, isClaimable, newTask, transitions, withEvent,
-  type AutomationStore, type TaskQueue
+  type AutomationStore, type DiscoveredOffer, type DiscoveryState, type KnownBoard, type MailConnection, type TaskQueue
 } from "./store.ts";
 import { adminFirestore } from "./firebaseAdmin.ts";
 import type { AutomationSettings, NewTask, PendingAction, Resolution, SavedAnswer, Submission, SubmissionResult, Task, VaultEntry } from "./types.ts";
@@ -221,6 +225,81 @@ export class FirestoreAutomationStore implements AutomationStore {
   }
   async deleteDeviceToken(uid: string, token: string) {
     await this.user(uid).collection("devices").doc(this.deviceId(token)).delete();
+  }
+  async getMailConnection(uid: string, provider: MailConnection["provider"]) {
+    const snap = await this.user(uid).collection("automation").doc(`mail_${provider}`).get();
+    return snap.exists ? (snap.data() as MailConnection) : null;
+  }
+  async saveMailConnection(uid: string, conn: MailConnection) {
+    await this.user(uid).collection("automation").doc(`mail_${conn.provider}`).set(clean(conn));
+  }
+  async deleteMailConnection(uid: string, provider: MailConnection["provider"]) {
+    await this.user(uid).collection("automation").doc(`mail_${provider}`).delete();
+  }
+  async upsertOffers(uid: string, offers: DiscoveredOffer[]) {
+    const col = this.user(uid).collection("offers");
+    let added = 0;
+    // Par paquets : une transaction Firestore est limitée à 500 écritures
+    for (let i = 0; i < offers.length; i += 200) {
+      const chunk = offers.slice(i, i + 200);
+      added += await this.db.runTransaction(async (tx) => {
+        const snaps = await tx.getAll(...chunk.map((o) => col.doc(o.id)));
+        let n = 0;
+        chunk.forEach((o, j) => {
+          const prev = snaps[j].exists ? (snaps[j].data() as DiscoveredOffer) : null;
+          if (!prev) n++;
+          tx.set(col.doc(o.id), clean(prev ? { ...o, status: prev.status, taskId: prev.taskId, firstSeenAt: prev.firstSeenAt } : o));
+        });
+        return n;
+      });
+    }
+    return { added };
+  }
+  async listOffers(uid: string, limit = 300) {
+    const snap = await this.user(uid).collection("offers").orderBy("lastSeenAt", "desc").limit(limit).get();
+    return snap.docs.map((d) => d.data() as DiscoveredOffer);
+  }
+  async getOffer(uid: string, id: string) {
+    const snap = await this.user(uid).collection("offers").doc(id).get();
+    return snap.exists ? (snap.data() as DiscoveredOffer) : null;
+  }
+  async updateOffer(uid: string, id: string, patch: Partial<Pick<DiscoveredOffer, "status" | "taskId">>) {
+    await this.user(uid).collection("offers").doc(id).set(clean(patch), { merge: true });
+  }
+  async getDiscovery(uid: string) {
+    const snap = await this.user(uid).collection("automation").doc("discovery").get();
+    if (!snap.exists) return null;
+    const { uid: _u, kind: _k, ...state } = snap.data() as any;
+    return state as DiscoveryState;
+  }
+  async saveDiscovery(uid: string, state: DiscoveryState) {
+    // uid et kind : permettent de retrouver les découvertes dues sur tous les comptes (requête de groupe)
+    await this.user(uid).collection("automation").doc("discovery").set(clean({ ...state, uid, kind: "discovery" }));
+  }
+  async claimDueDiscoveries(limit: number, leaseMs: number) {
+    const now = nowIso();
+    const snap = await this.db.collectionGroup("automation").where("kind", "==", "discovery").where("enabled", "==", true)
+      .where("nextRunAt", "<=", now).orderBy("nextRunAt").limit(limit).get();
+    const uids: string[] = [];
+    for (const doc of snap.docs) {
+      const claimed = await this.db.runTransaction(async (tx) => {
+        const cur = await tx.get(doc.ref);
+        if (!cur.exists || cur.get("enabled") !== true || String(cur.get("nextRunAt")) > now) return false;
+        tx.update(doc.ref, { nextRunAt: new Date(Date.now() + leaseMs).toISOString() });
+        return true;
+      });
+      if (claimed) uids.push(String(doc.get("uid")));
+    }
+    return uids;
+  }
+  async saveBoards(boards: Omit<KnownBoard, "lastSeenAt">[]) {
+    const batch = this.db.batch();
+    for (const b of boards.slice(0, 400)) batch.set(this.db.collection("ats_boards").doc(b.id.replace(/\//g, "_")), clean({ ...b, lastSeenAt: nowIso() }));
+    await batch.commit();
+  }
+  async listBoards(limit: number) {
+    const snap = await this.db.collection("ats_boards").orderBy("lastSeenAt", "desc").limit(limit).get();
+    return snap.docs.map((d) => d.data() as KnownBoard);
   }
   async acquireNotificationSlot(uid: string, key: string, windowMs: number) {
     const ref = this.user(uid).collection("automation").doc(`notify_${key}`);

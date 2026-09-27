@@ -11,6 +11,7 @@ import { categorize, questionKey } from "./answers.ts";
 import { jobKey, sanitizeSettings } from "./guardrails.ts";
 import { TaskStateError } from "./store.ts";
 import { VaultNotFoundError, VaultUnavailableError } from "./vault.ts";
+import { MailAuthError } from "./gmail.ts";
 import type { Automation } from "./index.ts";
 import type { Task } from "./types.ts";
 
@@ -54,8 +55,24 @@ export function createAutomationRouter(automation: Automation, opts: { authMode:
       return res.status(401).json({ success: false, error: "Secret invalide" });
     }
     const limit = Math.min(50, Math.max(1, Number(req.body?.limit) || 10));
-    res.json({ success: true, ...(await orchestrator.tick({ limit })) });
+    res.json({ success: true, ...(await automation.tick({ limit })) });
   }));
+
+  // Retour de Google après consentement (redirection du navigateur : pas de jeton Firebase, l'utilisateur est identifié par state)
+  router.get("/mail/google/callback", async (req, res) => {
+    const back = (status: string, message?: string) => {
+      const qs = new URLSearchParams({ onglet: "assistant", mail: status, ...(message ? { message } : {}) });
+      res.redirect(302, `/?${qs}`);
+    };
+    if (!automation.gmail) return back("error", "Connexion Gmail non configurée sur le serveur.");
+    if (req.query.error) return back("error", "Connexion annulée.");
+    try {
+      await automation.gmail.handleCallback(String(req.query.code || ""), String(req.query.state || ""));
+      back("connected");
+    } catch (e: any) {
+      back("error", e instanceof MailAuthError ? e.message : "Connexion Gmail impossible. Réessayez.");
+    }
+  });
 
   router.use((req: any, res, next) => {
     if (!req.uid && opts.authMode === "off" && !opts.production) req.uid = String(req.headers["x-dev-uid"] || "local-dev").slice(0, 128);
@@ -130,6 +147,81 @@ export function createAutomationRouter(automation: Automation, opts: { authMode:
     const task = await store.queue.get(req.params.id);
     if (!task || task.uid !== req.uid) return res.status(404).json({ success: false, error: "Candidature introuvable" });
     res.json({ success: true, task: taskView(await store.queue.cancel(task.id, "par l'utilisateur")) });
+  }));
+
+  // Offres trouvées pour l'utilisateur (sites d'emploi, pages carrière, publications)
+  router.get("/offers", wrap(async (req, res) => {
+    const discovery = await automation.discovery.ensureScheduled(req.uid);
+    const status = String(req.query.status || "");
+    const minScore = Number(req.query.minScore);
+    let offers = await store.listOffers(req.uid, 500);
+    offers = offers.filter((o) => (status ? o.status === status : o.status !== "dismissed"));
+    if (Number.isFinite(minScore) && minScore > 0) offers = offers.filter((o) => (o.score ?? -1) >= minScore);
+    // Meilleure compatibilité d'abord (offres sans compétences listées à la fin), puis les plus récentes
+    offers.sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || String(b.job?.publishedAt || "").localeCompare(String(a.job?.publishedAt || "")));
+    res.json({ success: true, discovery, total: offers.length, offers: offers.slice(0, Math.min(300, Number(req.query.limit) || 100)) });
+  }));
+
+  router.post("/offers/:id/apply", wrap(async (req, res) => {
+    const offer = await store.getOffer(req.uid, req.params.id);
+    if (!offer) return res.status(404).json({ success: false, error: "Offre introuvable" });
+    const candidate = req.body?.candidate && typeof req.body.candidate === "object" ? req.body.candidate : undefined;
+    const { task, created } = await store.queue.enqueue({ uid: req.uid, type: "apply", dedupeKey: jobKey(offer.job), payload: { job: offer.job, candidate, origin: "user" } });
+    await store.updateOffer(req.uid, offer.id, { status: "queued", taskId: task.id });
+    res.status(created ? 201 : 200).json({ success: true, created, task: taskView(task) });
+  }));
+
+  router.post("/offers/:id/dismiss", wrap(async (req, res) => {
+    const offer = await store.getOffer(req.uid, req.params.id);
+    if (!offer) return res.status(404).json({ success: false, error: "Offre introuvable" });
+    await store.updateOffer(req.uid, offer.id, { status: "dismissed" });
+    res.json({ success: true });
+  }));
+
+  router.get("/discovery", wrap(async (req, res) => {
+    res.json({ success: true, discovery: await automation.discovery.ensureScheduled(req.uid) });
+  }));
+
+  router.put("/discovery", wrap(async (req, res) => {
+    const current = await automation.discovery.ensureScheduled(req.uid);
+    const hours = Math.round(Number(req.body?.intervalHours));
+    const next = {
+      ...current,
+      enabled: typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled,
+      intervalHours: Number.isFinite(hours) ? Math.min(48, Math.max(2, hours)) : current.intervalHours
+    };
+    await store.saveDiscovery(req.uid, next);
+    res.json({ success: true, discovery: next });
+  }));
+
+  // Lancer la découverte tout de suite (au plus une fois toutes les 10 minutes)
+  router.post("/discovery/run", wrap(async (req, res) => {
+    if (!(await store.acquireNotificationSlot(req.uid, "discovery_manual", 10 * 60_000))) {
+      return res.status(429).json({ success: false, error: "Recherche déjà lancée il y a moins de 10 minutes." });
+    }
+    const candidate = req.body?.candidate && typeof req.body.candidate === "object" ? req.body.candidate : undefined;
+    res.json({ success: true, run: await automation.runDiscovery(req.uid, candidate) });
+  }));
+
+  // Boîte mail de l'utilisateur
+  router.get("/mail", wrap(async (req, res) => {
+    const google = await store.getMailConnection(req.uid, "google");
+    res.json({
+      success: true,
+      gmailAvailable: !!automation.gmail,
+      google: google ? { email: google.email, status: google.status, connectedAt: google.connectedAt } : null
+    });
+  }));
+
+  router.get("/mail/google/connect", wrap(async (req, res) => {
+    if (!automation.gmail) return res.status(503).json({ success: false, error: "Connexion Gmail non configurée sur le serveur." });
+    res.json({ success: true, url: automation.gmail.authorizationUrl(req.uid) });
+  }));
+
+  router.delete("/mail/google", wrap(async (req, res) => {
+    if (automation.gmail) await automation.gmail.disconnect(req.uid);
+    else await store.deleteMailConnection(req.uid, "google");
+    res.json({ success: true });
   }));
 
   // Base de réponses

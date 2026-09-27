@@ -143,3 +143,78 @@ export class ManualChannel implements ApplyChannel {
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// La bonne alternance : API officielle d'envoi de candidature (POST /job/v1/apply)
+// La candidature est transmise par email au recruteur par La bonne alternance.
+// Habilitation « applications:write » : automatique avec une clé bac à sable, sur demande en production.
+// ---------------------------------------------------------------------------
+type HttpFetch = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) =>
+  Promise<{ ok: boolean; status: number; json(): Promise<any>; text(): Promise<string> }>;
+
+export function splitName(fullName: string): { first: string; last: string } {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return { first: parts[0] || "", last: "" };
+  return { first: parts[0], last: parts.slice(1).join(" ") };
+}
+
+/** Téléphone au format national (10 chiffres) quand c'est possible. */
+export function normalizePhone(phone: string): string {
+  const digits = String(phone || "").replace(/[^\d+]/g, "");
+  if (/^\+33\d{9}$/.test(digits)) return `0${digits.slice(3)}`;
+  if (/^0033\d{9}$/.test(digits)) return `0${digits.slice(4)}`;
+  return digits;
+}
+
+export class LbaChannel implements ApplyChannel {
+  readonly id = "lba";
+  readonly label = "La bonne alternance (API officielle)";
+
+  constructor(private opts: { apiKey?: string; baseUrl?: string; fetch?: HttpFetch }) {}
+
+  canHandle(job: any) {
+    return !!this.opts.apiKey && !!job?.lbaRecipientId;
+  }
+
+  async apply(ctx: ChannelContext): Promise<ChannelOutcome> {
+    if (!ctx.documents.cvPdfBase64) return { kind: "unavailable", reason: "CV PDF indisponible (compilateur LaTeX absent)" };
+    const { first, last } = splitName(ctx.candidate?.fullName);
+    const email = String(ctx.candidate?.email || "").trim();
+    const phone = normalizePhone(ctx.candidate?.phone);
+    const missing = [!first && "prénom", !last && "nom", !email && "email", !phone && "téléphone"].filter(Boolean);
+    if (missing.length) return { kind: "unavailable", reason: `profil incomplet (${missing.join(", ")})` };
+
+    const body = {
+      applicant_first_name: first.slice(0, 50),
+      applicant_last_name: last.slice(0, 50),
+      applicant_email: email,
+      applicant_phone: phone,
+      applicant_attachment_name: `CV_${safeFilename(ctx.candidate?.fullName)}.pdf`,
+      applicant_attachment_content: ctx.documents.cvPdfBase64,
+      applicant_message: ctx.documents.coverLetter || null,
+      recipient_id: String(ctx.job.lbaRecipientId)
+    };
+    const base = (this.opts.baseUrl || "https://api.apprentissage.beta.gouv.fr/api").replace(/\/$/, "");
+    const doFetch: HttpFetch = this.opts.fetch || ((url, init) => fetch(url, init) as any);
+    let res;
+    try {
+      res = await doFetch(`${base}/job/v1/apply`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.opts.apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30_000)
+      });
+    } catch (e: any) {
+      throw new RetryableError(`La bonne alternance injoignable : ${e?.message || e}`);
+    }
+    // Limite : 10 envois par minute pour tout le service
+    if (res.status === 429 || res.status >= 500) throw new RetryableError(`La bonne alternance indisponible (${res.status})`);
+    if (res.status === 401 || res.status === 403) return { kind: "unavailable", reason: "clé La bonne alternance sans droit d'envoi (habilitation applications:write)" };
+    if (!res.ok) {
+      const detail = await res.json().then((d: any) => d?.message).catch(() => "");
+      return { kind: "unavailable", reason: `candidature refusée par La bonne alternance (${res.status}${detail ? ` : ${detail}` : ""})` };
+    }
+    const data = await res.json().catch(() => ({}));
+    return { kind: "submitted", reference: data?.id ? String(data.id) : undefined, details: { via: "La bonne alternance", recipientId: body.recipient_id } };
+  }
+}

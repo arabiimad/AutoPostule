@@ -71,7 +71,7 @@ export class Notifier {
     const tokens = await this.store.listDeviceTokens(uid);
     if (!tokens.length) return false;
     const waiting = (await this.store.queue.listWaiting(uid)).length;
-    const link = `${this.opts.appUrl.replace(/\/$/, "")}/?view=pending`;
+    const link = `${this.opts.appUrl.replace(/\/$/, "")}/?onglet=assistant`;
     const message: PushMessage = urgent
       ? { title: "Code de vérification demandé", body: "Un site demande un code : ouvrez AutoPostule pour le saisir avant qu'il expire.", link, data: { kind } }
       : {

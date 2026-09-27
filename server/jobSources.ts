@@ -192,7 +192,7 @@ function isoOrUndefined(v: any): string | undefined {
 }
 
 /** Compétences exploitables pour le score : compétences listées + compétences reconnues dans le texte. */
-function deriveSkills(listed: string[], title: string, description: string): string[] {
+export function deriveSkills(listed: string[], title: string, description: string): string[] {
   const fromText = extractTechnologies(`${title}\n${description}`);
   const short = listed.filter((s) => s && s.length <= 60);
   return Array.from(new Set([...fromText, ...short])).slice(0, 15);
@@ -228,6 +228,7 @@ export function normalizeLbaJob(j: any): JobOffer | null {
     source: partner === "La bonne alternance" ? "La bonne alternance" : `${partner} (via La bonne alternance)`,
     origin: "la-bonne-alternance",
     applyUrl: String(j.apply?.url || "https://labonnealternance.apprentissage.beta.gouv.fr/"),
+    ...(j.apply?.recipient_id ? { lbaRecipientId: String(j.apply.recipient_id) } : {}),
     publishedAt: isoOrUndefined(j.offer?.publication?.creation) || new Date().toISOString(),
     expiresAt: isoOrUndefined(j.offer?.publication?.expiration),
     status: j.offer?.status && j.offer.status !== "Active" ? "expired" : "active",
@@ -296,6 +297,7 @@ export function normalizeLbaRecruiter(r: any, query = ""): JobOffer | null {
     companyWebsite: wp.website || undefined,
     siret: wp.siret || undefined,
     applyUrl: String(r.apply?.url || "https://labonnealternance.apprentissage.beta.gouv.fr/"),
+    ...(r.apply?.recipient_id ? { lbaRecipientId: String(r.apply.recipient_id) } : {}),
     // Pas de date de publication : on ne prétend pas que c'est récent
     publishedAt: "",
     status: "active",
@@ -395,6 +397,7 @@ export function normalizeFtJob(o: any): JobOffer | null {
     source: "France Travail",
     origin: "france-travail",
     applyUrl: String(o.origineOffre?.urlOrigine || o.contact?.urlPostulation || `https://candidat.francetravail.fr/offres/recherche/detail/${o.id}`),
+    ...(typeof o.contact?.courriel === "string" && o.contact.courriel.includes("@") ? { contactEmail: o.contact.courriel.trim() } : {}),
     publishedAt: isoOrUndefined(o.dateCreation) || new Date().toISOString(),
     status: "active",
     domain: o.secteurActiviteLibelle || undefined,
@@ -786,6 +789,8 @@ export function mergeDuplicates(jobs: JobOffer[]): JobOffer[] {
       existing.descriptionIsSnippet = false;
     }
     existing.salary ||= job.salary;
+    existing.contactEmail ||= job.contactEmail;
+    existing.lbaRecipientId ||= job.lbaRecipientId;
     existing.companyLogo ||= job.companyLogo;
     existing.companyWebsite ||= job.companyWebsite;
     existing.companySize ||= job.companySize;

@@ -7,6 +7,7 @@ import { COMPREHENSIVE_REAL_JOBS } from "./src/realJobsData.ts";
 import { filterJobs } from "./src/utils/jobFilter.ts";
 import { calculateCandidateMatch } from "./src/utils/skillMatcher.ts";
 import { searchRealJobs, hasRealSources, getSourceStatus } from "./server/jobSources.ts";
+import type { JobOffer } from "./src/types.ts";
 import { generateFallbackLatex, normalizeTemplate, templateInstructions, compileLatex, detectLatexCompiler, TEMPLATES } from "./server/latex.ts";
 import { authMiddleware, getAuthMode } from "./server/auth.ts";
 import { extractTextFromDocx } from "./server/docx.ts";
@@ -15,6 +16,8 @@ import { createHash } from "node:crypto";
 import { createAutomation } from "./server/automation/index.ts";
 import { createAutomationRouter } from "./server/automation/routes.ts";
 import type { AiAnswerFn } from "./server/automation/answers.ts";
+import { boardId, boardsFromEnv, fetchBoardJobs, type Board } from "./server/discovery/atsBoards.ts";
+import type { GroundedSearchFn } from "./server/discovery/webDiscovery.ts";
 import type { PreparedDocuments } from "./server/automation/types.ts";
 import {
   analyzeOffer, tailorCv, applyTailored, sanitizeTailored, rewriteText, fallbackOfferAnalysis, defaultTailored,
@@ -435,6 +438,41 @@ Renvoie uniquement ce JSON : {"answer": "...", "confidence": 0.0 à 1.0}`;
   return { answer: parsed.answer.trim(), confidence: Math.max(0, Math.min(1, Number(parsed.confidence) || 0)) };
 };
 
+/**
+ * Recherche Google via Gemini : texte de la réponse + pages réellement consultées (métadonnées de grounding).
+ * Sert à la découverte d'offres cachées (publications « on recrute », pages carrière).
+ */
+const groundedWebSearch: GroundedSearchFn = async (prompt) => {
+  const ai = getGeminiClient();
+  if (!ai) throw new Error("Gemini indisponible");
+  const r: any = await callGeminiResilient(ai, { preferredModel: MODEL_FAST, contents: prompt, config: { tools: [{ googleSearch: {} }], temperature: 0 } });
+  const chunks: any[] = r?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  return {
+    text: r?.text || "",
+    sources: chunks.map((c) => ({ uri: String(c?.web?.uri || ""), title: c?.web?.title ? String(c.web.title) : undefined })).filter((c) => /^https:\/\//.test(c.uri))
+  };
+};
+
+/** Liens de résultats Google (redirections) → adresse réelle de la page. */
+async function resolveGroundingUrl(uri: string): Promise<string> {
+  if (!/^https:\/\/vertexaisearch\.cloud\.google\.com\//.test(uri)) return uri;
+  const res = await fetch(uri, { method: "HEAD", redirect: "manual", signal: AbortSignal.timeout(8000) });
+  const location = res.headers.get("location");
+  return location && /^https?:\/\//.test(location) ? location : uri;
+}
+
+/** Offres d'une page carrière, en cache 3 h (partagé entre utilisateurs). */
+async function cachedBoardJobs(board: Board): Promise<JobOffer[]> {
+  const key = `board:${boardId(board)}`;
+  const hit = await kv().get(key);
+  if (hit) {
+    try { return JSON.parse(hit); } catch { /* recharge */ }
+  }
+  const jobs = await fetchBoardJobs(board);
+  await kv().set(key, JSON.stringify(jobs), 3 * 3600);
+  return jobs;
+}
+
 const SUPPORTED_AI_MIME = /^(application\/pdf|image\/(png|jpeg|webp))$/i;
 
 async function startServer() {
@@ -457,9 +495,22 @@ async function startServer() {
   app.use("/api/client-errors", createRateLimiter("errors", 20, 60_000));
 
   // Agent de candidature automatique (file de tâches, validations, coffre, base de réponses)
-  const automation = await createAutomation({ prepare: prepareApplicationDocuments, ai: answerFormQuestion, log: logEvent });
+  const automation = await createAutomation({
+    prepare: prepareApplicationDocuments,
+    ai: answerFormQuestion,
+    log: logEvent,
+    discovery: {
+      searchJobs: hasRealSources() ? searchRealJobs : null,
+      webSearch: process.env.GEMINI_API_KEY && process.env.DISCOVERY_WEB !== "off" ? groundedWebSearch : null,
+      resolveUrl: resolveGroundingUrl,
+      fetchBoard: cachedBoardJobs,
+      seedBoards: boardsFromEnv()
+    }
+  });
   const automationAuth = authMiddleware();
-  app.use("/api/automation", (req: any, res: any, next: any) => (req.path === "/tick" ? next() : automationAuth(req, res, next)));
+  // /tick (Cloud Scheduler, secret dédié) et le retour de Google (redirection du navigateur) n'ont pas de jeton Firebase
+  app.use("/api/automation", (req: any, res: any, next: any) =>
+    (req.path === "/tick" || req.path === "/mail/google/callback" ? next() : automationAuth(req, res, next)));
   app.use("/api/automation", createRateLimiter("automation", 120, 60_000));
   app.use("/api/automation", createAutomationRouter(automation, {
     authMode: getAuthMode(),
