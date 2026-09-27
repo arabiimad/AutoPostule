@@ -262,8 +262,9 @@ function renderModernCv(d: CvData): string {
   if (d.projects.length) sections.push(`\\section{Projets}\n${d.projects.map((p) => `\\cvitem{${p.name}}{${p.description}${projectTech(p) ? ` \\textit{(${projectTech(p)})}` : ""}}`).join("\n")}`);
   if (d.languages.length) sections.push(`\\section{Langues}\n${d.languages.map((l) => `\\cvitem{}{${l}}`).join("\n")}`);
 
+  // Icônes Font Awesome si disponibles (Overleaf, TeX Live complet), sinon lettres : le CV compile partout
   return `\\documentclass[11pt,a4paper,sans]{moderncv}
-\\moderncvstyle{classic}
+\\IfFileExists{fontawesome5.sty}{\\moderncvstyle{classic}}{\\moderncvstyle[nosymbols]{classic}}
 \\moderncvcolor{blue}
 \\usepackage[utf8]{inputenc}
 \\usepackage[T1]{fontenc}
