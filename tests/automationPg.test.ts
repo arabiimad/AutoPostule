@@ -44,7 +44,7 @@ before(async () => {
   if (skip) return;
   const base = [...ARGS];
   execFileSync('psql', [...base, '-d', 'postgres', '-qc', `drop database if exists ${DB}`, '-c', `create database ${DB}`]);
-  for (const f of ['tests/sql/supabase-shim.sql', 'supabase/migrations/001_init.sql', 'supabase/migrations/002_automation.sql']) {
+  for (const f of ['tests/sql/supabase-shim.sql', 'supabase/migrations/001_init.sql', 'supabase/migrations/002_automation.sql', 'supabase/migrations/003_push.sql']) {
     execFileSync('psql', [...base, '-d', DB, '-v', 'ON_ERROR_STOP=1', '-q', '-f', f], { stdio: ['ignore', 'ignore', 'pipe'] });
   }
   pool = new pg.Pool({ host: arg('-h'), port: Number(arg('-p') || 5432), user: arg('-U'), password: process.env.PGPASSWORD, database: DB });
@@ -106,4 +106,30 @@ test('SSL : exigé pour une base distante, pas pour une base locale', async () =
   assert.equal(needsSsl('postgresql://postgres@/db?host=%2Fvar%2Ftmp%2Fpg&port=5433'), false);
   assert.equal(needsSsl('postgresql://postgres@localhost:5432/db'), false);
   assert.equal(needsSsl('postgresql://u@db.example.com/db?sslmode=disable'), false);
+});
+
+test('notifications : envoyées à chaque appareil, abonnements expirés supprimés', { skip }, async () => {
+  const { sendPushToUser } = await import('../server/automation/push.ts');
+  await q(`insert into public.push_subscriptions (endpoint, user_id, p256dh, auth) values ('https://push.test/ok', $1, 'k', 'a'), ('https://push.test/expire', $1, 'k', 'a')`, [U]);
+  const got: string[] = [];
+  const n = await sendPushToUser(pool, U, { title: 'Candidature envoyée', body: 'x', url: '/' }, async (sub, payload) => {
+    if (sub.endpoint.endsWith('expire')) throw Object.assign(new Error('gone'), { statusCode: 410 });
+    got.push(JSON.parse(payload).title);
+    return { statusCode: 201 };
+  });
+  assert.equal(n, 1);
+  assert.deepEqual(got, ['Candidature envoyée']);
+  assert.deepEqual((await q(`select endpoint from public.push_subscriptions where user_id = $1`, [U])).map(r => r.endpoint), ['https://push.test/ok']);
+});
+
+test('notifications : message chiffré selon le standard Web Push (clés VAPID)', async () => {
+  const webpush = (await import('web-push')).default;
+  const { createECDH, randomBytes } = await import('node:crypto');
+  const vapid = webpush.generateVAPIDKeys();
+  const ecdh = createECDH('prime256v1'); ecdh.generateKeys();
+  const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: ecdh.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') } };
+  const d = webpush.generateRequestDetails(sub, JSON.stringify({ title: 'Candidature envoyée' }), { vapidDetails: { subject: 'mailto:test@kareer.pro', publicKey: vapid.publicKey, privateKey: vapid.privateKey } });
+  assert.equal(d.headers['Content-Encoding'], 'aes128gcm');
+  assert.match(String(d.headers.Authorization), /^vapid t=.+, k=/);
+  assert.ok(!Buffer.from(d.body as Buffer).toString('latin1').includes('Candidature'), 'contenu chiffré');
 });

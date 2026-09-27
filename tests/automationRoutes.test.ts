@@ -163,3 +163,15 @@ test('questions de formulaire : listées, réponses enregistrées une fois, offr
   assert.equal((await q(`select answer from public.personal_answers where user_id = $1 and question_key = 'permis-b'`, [A]))[0].answer, 'Oui');
   assert.equal((await call('GET', '/api/automation', B)).json.questions.length, 0, 'isolation');
 });
+
+test('notifications : abonnement de l’appareil enregistré puis supprimé, adresse non https refusée', { skip }, async () => {
+  execFileSync('psql', [...ARGS, '-d', DB, '-v', 'ON_ERROR_STOP=1', '-q', '-f', 'supabase/migrations/003_push.sql'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/xyz', keys: { p256dh: 'BPk', auth: 'au' } };
+  assert.equal((await call('POST', '/api/automation/push', A, { subscription: { ...sub, endpoint: 'http://evil.test' } })).status, 400);
+  assert.equal((await call('POST', '/api/automation/push', A, { subscription: sub })).status, 200);
+  assert.equal((await q(`select user_id from public.push_subscriptions`))[0].user_id, A);
+  assert.equal((await call('DELETE', '/api/automation/push', B, { endpoint: sub.endpoint })).status, 200);
+  assert.equal((await q(`select count(*)::int as n from public.push_subscriptions`))[0].n, 1, 'un autre compte ne peut pas le supprimer');
+  await call('DELETE', '/api/automation/push', A, { endpoint: sub.endpoint });
+  assert.equal((await q(`select count(*)::int as n from public.push_subscriptions`))[0].n, 0);
+});

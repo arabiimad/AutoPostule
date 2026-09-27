@@ -1,0 +1,11 @@
+{
+  "name": "Kareer",
+  "short_name": "Kareer",
+  "description": "Recherche d'emploi, CV adaptés et candidature automatique",
+  "lang": "fr",
+  "start_url": "/?onglet=assistant",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [{ "src": "/kareer-logo.png", "sizes": "128x128", "type": "image/png", "purpose": "any" }]
+}

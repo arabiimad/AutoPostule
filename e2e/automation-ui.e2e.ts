@@ -41,7 +41,7 @@ const check = (label: string, cond: unknown, detail = "") => {
 };
 
 execFileSync("psql", [...ARGS, "-d", "postgres", "-qc", `drop database if exists ${DB}`, "-c", `create database ${DB}`]);
-for (const f of ["tests/sql/supabase-shim.sql", "supabase/migrations/001_init.sql", "supabase/migrations/002_automation.sql"]) {
+for (const f of ["tests/sql/supabase-shim.sql", "supabase/migrations/001_init.sql", "supabase/migrations/002_automation.sql", "supabase/migrations/003_push.sql"]) {
   execFileSync("psql", [...ARGS, "-d", DB, "-v", "ON_ERROR_STOP=1", "-q", "-f", path.join(root, f)], { stdio: ["ignore", "ignore", "pipe"] });
 }
 const host = arg("-h") || "localhost";

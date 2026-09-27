@@ -55,6 +55,8 @@ export interface AutomationStore {
   /** Dossier visible dans l'application (tableau Candidatures). */
   upsertApplication(userId: string, application: Record<string, any>): Promise<void>;
   logEvent(userId: string, type: string, message: string, data?: Record<string, any>, refs?: { taskId?: number; attemptId?: string }): Promise<void>;
+  /** Notification sur les appareils du candidat (sans effet si non configuré). Ne doit jamais faire échouer un traitement. */
+  notify(userId: string, message: { title: string; body: string; url: string; tag?: string }): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +72,7 @@ export class MemoryAutomationStore implements AutomationStore {
   applications = new Map<string, Record<string, any>>();
   answers = new Map<string, Record<string, string>>();
   events: { userId: string; type: string; message: string; data?: any }[] = [];
+  notifications: { userId: string; title: string; body: string; url: string; tag?: string }[] = [];
   private seq = 0;
   now = () => Date.now();
 
@@ -158,5 +161,8 @@ export class MemoryAutomationStore implements AutomationStore {
   }
   async logEvent(userId: string, type: string, message: string, data?: Record<string, any>) {
     this.events.push({ userId, type, message, data });
+  }
+  async notify(userId: string, message: { title: string; body: string; url: string; tag?: string }) {
+    this.notifications.push({ userId, ...message });
   }
 }

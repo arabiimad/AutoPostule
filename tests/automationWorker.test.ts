@@ -229,3 +229,16 @@ test('canal formulaire non autorisé par le candidat : dossier prêt, rien n’e
   assert.equal(calls.length, 0);
   assert.equal(s.status('f5'), 'needs_user');
 });
+
+test('notifications : envoi, action demandée ; pas une par offre de plateforme', async () => {
+  const s = setup();
+  s.store.mail.clear();
+  await s.add(offer('n1'));                                                                 // messagerie absente → action demandée
+  await s.add(offer('n2', { description: 'Via le bouton.', applyUrl: 'https://www.linkedin.com/jobs/view/1' })); // plateforme
+  await s.drain();
+  assert.deepEqual(s.store.notifications.map(n => n.title), ['Kareer : action demandée']);
+  const t = setup();
+  await t.add(offer('n3'));
+  await t.drain();
+  assert.deepEqual(t.store.notifications.map(n => [n.title, n.url, n.tag]), [['Candidature envoyée', '/?onglet=candidatures', 'offre-n3']]);
+});

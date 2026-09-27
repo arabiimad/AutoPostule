@@ -18,6 +18,7 @@ import { PgAutomationStore } from "../automation/pgStore.ts";
 import { policyFromRow } from "../automation/policy.ts";
 import { encryptToken, decryptToken, GOOGLE_TOKEN_URL, MICROSOFT_TOKEN_URL } from "../automation/email.ts";
 import { logEvent } from "../log.ts";
+import { pushConfigured } from "../automation/push.ts";
 
 type Provider = "gmail" | "outlook";
 const PROVIDERS: Provider[] = ["gmail", "outlook"];
@@ -166,7 +167,8 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
       pending: tasks?.pending || 0,
       needsUser: tasks?.needs_user || 0,
       events: events.map((e) => ({ type: e.type, message: e.message, at: e.created_at })),
-      questions: asked.map((a) => ({ key: a.key, label: a.label }))
+      questions: asked.map((a) => ({ key: a.key, label: a.label })),
+      push: { configured: pushConfigured(), publicKey: process.env.VAPID_PUBLIC_KEY || null }
     });
   });
 
@@ -222,6 +224,25 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
       [req.uid]
     );
     return res.json({ success: true, saved: items.length, requeued: requeued.length });
+  });
+
+  // Notifications sur cet appareil (Web Push)
+  app.post("/api/automation/push", auth, limiter, guard, async (req: any, res) => {
+    const sub = req.body?.subscription;
+    const endpoint = String(sub?.endpoint || "");
+    const p256dh = String(sub?.keys?.p256dh || "");
+    const authKey = String(sub?.keys?.auth || "");
+    if (!/^https:\/\//.test(endpoint) || endpoint.length > 1000 || !p256dh || !authKey) return res.status(400).json({ success: false, error: "Abonnement aux notifications invalide." });
+    await q(
+      `insert into public.push_subscriptions (endpoint, user_id, p256dh, auth, user_agent) values ($1, $2, $3, $4, $5)
+       on conflict (endpoint) do update set user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, user_agent = excluded.user_agent`,
+      [endpoint, req.uid, p256dh, authKey, String(req.headers["user-agent"] || "").slice(0, 200)]
+    );
+    return res.json({ success: true });
+  });
+  app.delete("/api/automation/push", auth, limiter, guard, async (req: any, res) => {
+    await q(`delete from public.push_subscriptions where user_id = $1 and endpoint = $2`, [req.uid, String(req.body?.endpoint || "")]);
+    return res.json({ success: true });
   });
 
   for (const action of ["pause", "resume"] as const) {

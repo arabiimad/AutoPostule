@@ -17,7 +17,14 @@ interface AutomationState {
   needsUser: number;
   events: { type: string; message: string; at: string }[];
   questions?: { key: string; label: string }[];
+  push?: { configured: boolean; publicKey: string | null };
 }
+
+const b64ToBytes = (b64: string) => {
+  const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (b64.length % 4)) % 4));
+  return Uint8Array.from(s, c => c.charCodeAt(0));
+};
+const pushSupported = () => typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 
 const CONTRACTS = [['cdi', 'CDI'], ['cdd', 'CDD'], ['alternance', 'Alternance'], ['stage', 'Stage'], ['freelance', 'Freelance']] as const;
 const splitList = (s: string) => s.split(/[,;\n]/).map(x => x.trim()).filter(Boolean);
@@ -36,6 +43,42 @@ export const AutoApplyPanel: React.FC<{ defaultRoles: string[]; defaultLocation?
   const [consentOpen, setConsentOpen] = useState(false);
   const [consent, setConsent] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [pushOn, setPushOn] = useState(false);
+
+  useEffect(() => {
+    if (!pushSupported()) return;
+    navigator.serviceWorker.getRegistration().then(r => r?.pushManager.getSubscription()).then(s => setPushOn(!!s)).catch(() => {});
+  }, []);
+
+  /** Notifications sur cet appareil (téléphone : sur iPhone, ajoutez d'abord Kareer à l'écran d'accueil). */
+  const enablePush = async () => {
+    if (!pushSupported() || !state?.push?.publicKey) return;
+    setBusy(true);
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return onNotify('Notifications refusées', 'Autorisez-les dans les réglages du navigateur pour être prévenu(e).', true);
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(state.push.publicKey) });
+      const res = await apiFetch('/api/automation/push', { subscription: sub.toJSON() });
+      if (!res.ok) return onNotify('Notifications indisponibles', 'Réessayez dans un instant.', true);
+      setPushOn(true);
+      onNotify('Notifications activées', 'Vous serez prévenu(e) sur cet appareil de chaque envoi et de chaque action à faire.');
+    } catch {
+      onNotify('Notifications indisponibles', 'Ce navigateur ne permet pas les notifications (sur iPhone : ajoutez Kareer à l’écran d’accueil).', true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const disablePush = async () => {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager.getSubscription();
+    if (sub) {
+      await apiFetch('/api/automation/push', { endpoint: sub.endpoint }, { method: 'DELETE' }).catch(() => {});
+      await sub.unsubscribe().catch(() => {});
+    }
+    setPushOn(false);
+  };
   const [form, setForm] = useState({ roles: '', locations: '', contracts: [] as string[], email: true, form: false, minFit: 60, dailyLimit: 5, excludedCompanies: '', excludedKeywords: '' });
 
   const load = async () => {
@@ -189,6 +232,15 @@ export const AutoApplyPanel: React.FC<{ defaultRoles: string[]; defaultLocation?
         )}
         {state.connections.some(c => c.status === 'revoked') && <p className="text-xs text-rose-700">L’accès à votre messagerie a expiré : reconnectez-la pour reprendre les envois.</p>}
       </div>
+
+      {state.push?.configured && pushSupported() && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-4 text-sm">
+          <span className="text-slate-700">{pushOn ? 'Notifications activées sur cet appareil.' : 'Être prévenu(e) sur ce téléphone ou cet ordinateur, application fermée.'}</span>
+          {pushOn
+            ? <Button type="button" size="sm" variant="ghost" onClick={disablePush}>Désactiver</Button>
+            : <Button type="button" size="sm" variant="secondary" disabled={busy} onClick={enablePush}>Activer les notifications</Button>}
+        </div>
+      )}
 
       <div className="grid gap-3 border-t border-slate-200 pt-4 sm:grid-cols-2">
         <label className="text-sm font-medium text-slate-700">Métiers recherchés

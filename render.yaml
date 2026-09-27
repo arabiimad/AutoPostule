@@ -1,6 +1,6 @@
 # Déploiement Render (région Francfort) : service web + worker permanent d'auto-candidature.
 # Les secrets (sync: false) se saisissent dans le tableau de bord Render, jamais dans Git.
-# Base de données et stockage : Supabase (UE). Migrations : supabase/migrations (001, 002) à appliquer avant.
+# Base de données et stockage : Supabase (UE). Migrations : supabase/migrations (001, 002, 003) à appliquer avant.
 services:
   - type: web
     name: kareer-web
@@ -22,6 +22,7 @@ services:
       - { key: MICROSOFT_CLIENT_ID, sync: false }
       - { key: MICROSOFT_CLIENT_SECRET, sync: false }
       - { key: AUTOMATION_MAX_DAILY, value: "5" }
+      - { key: VAPID_PUBLIC_KEY, sync: false }
 
   - type: worker
     name: kareer-worker
@@ -45,5 +46,8 @@ services:
       - { key: ADZUNA_APP_ID, sync: false }
       - { key: ADZUNA_APP_KEY, sync: false }
       - { key: JOOBLE_API_KEY, sync: false }
+      - { key: VAPID_PUBLIC_KEY, sync: false }
+      - { key: VAPID_PRIVATE_KEY, sync: false }
+      - { key: VAPID_SUBJECT, sync: false }
       - { key: AUTOMATION_SEARCH_EVERY_HOURS, value: "12" }
       - { key: AUTOMATION_CONCURRENCY, value: "1" }

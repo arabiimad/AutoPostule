@@ -7,6 +7,7 @@
 import pg from "pg";
 import type { AutomationStore, Task, MailConnection, ReserveInput, AttemptStatus, TaskStatus, TaskKind } from "./store.ts";
 import { policyFromRow } from "./policy.ts";
+import { sendPushToUser } from "./push.ts";
 
 const validDate = (v: unknown) => {
   const d = v ? new Date(String(v)) : null;
@@ -188,6 +189,14 @@ export class PgAutomationStore implements AutomationStore {
     );
     for (const r of rows) await this.logEvent(r.user_id, "uncertain", "Envoi interrompu : vérifiez vos messages envoyés avant de renvoyer.", { offerId: r.offer_id });
     return rows.length;
+  }
+
+  async notify(userId: string, message: { title: string; body: string; url: string; tag?: string }) {
+    try {
+      await sendPushToUser(this.pool, userId, message);
+    } catch {
+      /* notification facultative : jamais bloquante */
+    }
   }
 
   async close() {

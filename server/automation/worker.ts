@@ -88,8 +88,13 @@ export async function processOffer(task: Task, deps: WorkerDeps): Promise<Outcom
       automation: { state, reason, channel: channel.kind, target: channel.target, updatedAt: now.toISOString() }
     });
     await store.logEvent(userId, "intervention", reason, { offerId: offer.id, channel: channel.kind }, { taskId: task.id });
+    // Notification seulement quand une action de votre part débloque l'envoi (pas pour chaque offre de plateforme)
+    if (channel.kind !== "platform" && channel.kind !== "unknown") {
+      await store.notify(userId, { title: "Kareer : action demandée", body: `${offer.company} — ${reason}`.slice(0, 180), url: "/?onglet=assistant", tag: `offre-${offer.id}` }).catch(() => {});
+    }
     return needsUser(reason);
   };
+
 
   if (!automatable) {
     if (channel.kind === "platform") return intervention(`Candidature à valider sur ${channel.platform} (envoi automatique interdit par la plateforme) : votre CV et votre lettre sont prêts.`);
@@ -175,6 +180,7 @@ export async function processOffer(task: Task, deps: WorkerDeps): Promise<Outcom
       automation: { state: "uncertain", reason: "Résultat incertain : vérifiez vos messages envoyés avant de renvoyer.", channel: "email", target: channel.target, attemptId, updatedAt: now.toISOString() }
     });
     await store.logEvent(userId, "uncertain", `Résultat incertain pour ${offer.company} : vérifiez vos messages envoyés.`, { offerId: offer.id }, refs);
+    await store.notify(userId, { title: "Envoi à vérifier", body: `${offer.company} : vérifiez vos messages envoyés avant de renvoyer.`, url: "/?onglet=assistant", tag: `offre-${offer.id}` }).catch(() => {});
     return { status: "uncertain", message: "Résultat de l'envoi incertain." };
   }
 
@@ -187,6 +193,7 @@ export async function processOffer(task: Task, deps: WorkerDeps): Promise<Outcom
     logEvents: [{ timestamp: now.toLocaleString("fr-FR"), message: `Candidature envoyée automatiquement à ${channel.target} (acceptée par ${sent.provider === "gmail" ? "Gmail" : "Outlook"}).` }]
   });
   await store.logEvent(userId, "submitted", `Candidature envoyée à ${offer.company} (${channel.target}).`, { offerId: offer.id, proof }, refs);
+  await store.notify(userId, { title: "Candidature envoyée", body: `${offer.title} — ${offer.company}`, url: "/?onglet=candidatures", tag: `offre-${offer.id}` }).catch(() => {});
   return done("Candidature envoyée.");
 }
 
@@ -235,6 +242,7 @@ async function submitByForm(
       logEvents: [{ timestamp: now.toLocaleString("fr-FR"), message: `Candidature envoyée automatiquement par le formulaire ${site} (confirmation affichée).` }]
     });
     await store.logEvent(task.userId, "submitted", `Candidature envoyée à ${offer.company} (formulaire ${site}).`, { offerId: offer.id, proof }, refs);
+    await store.notify(task.userId, { title: "Candidature envoyée", body: `${offer.title} — ${offer.company}`, url: "/?onglet=candidatures", tag: `offre-${offer.id}` }).catch(() => {});
     return done("Candidature envoyée.");
   }
   if (result.status === "uncertain") {
@@ -244,6 +252,7 @@ async function submitByForm(
       automation: { state: "uncertain", reason: "Résultat incertain : vérifiez vos emails (accusé de réception) avant de renvoyer.", channel: channel.kind, target: channel.target, attemptId, updatedAt: now.toISOString() }
     });
     await store.logEvent(task.userId, "uncertain", `Résultat incertain pour ${offer.company} (formulaire ${site}).`, { offerId: offer.id }, refs);
+    await store.notify(task.userId, { title: "Envoi à vérifier", body: `${offer.company} : cherchez l'accusé de réception avant de renvoyer.`, url: "/?onglet=assistant", tag: `offre-${offer.id}` }).catch(() => {});
     return { status: "uncertain", message: result.reason };
   }
   if (result.status === "cancelled") return { status: "cancelled", message: result.reason };
@@ -270,6 +279,9 @@ export async function runSearch(task: Task, deps: WorkerDeps): Promise<Outcome> 
     if (await store.enqueue({ userId: task.userId, kind: "process_offer", offerId: o.id })) queued++;
   }
   await store.logEvent(task.userId, "search", `${offers.length} offre(s) trouvée(s), ${queued} retenue(s) pour candidature.`, { found: offers.length, queued }, { taskId: task.id });
+  if (queued > 0) {
+    await store.notify(task.userId, { title: "Nouvelles offres pour vous", body: `${queued} offre(s) correspondent à vos critères : candidatures en préparation.`, url: "/?onglet=assistant", tag: "recherche" }).catch(() => {});
+  }
   return done(`${queued} offre(s) ajoutée(s) à la file.`);
 }
 
