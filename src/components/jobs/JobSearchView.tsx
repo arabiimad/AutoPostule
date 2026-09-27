@@ -489,6 +489,7 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
 const SOURCE_NAMES: Record<string, string> = {
   laBonneAlternance: 'La bonne alternance',
   franceTravail: 'France Travail',
+  sitesCarriere: 'Sites carrière',
   jsearch: 'Google Jobs',
   adzuna: 'Adzuna',
   jooble: 'Jooble'

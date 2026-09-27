@@ -51,11 +51,12 @@ export interface SourceReport {
   skipped?: string;
 }
 
-export type SourceKey = "laBonneAlternance" | "franceTravail" | "jsearch" | "adzuna" | "jooble";
+export type SourceKey = "laBonneAlternance" | "franceTravail" | "sitesCarriere" | "jsearch" | "adzuna" | "jooble";
 
 export const SOURCE_LABELS: Record<SourceKey, string> = {
   laBonneAlternance: "La bonne alternance",
   franceTravail: "France Travail",
+  sitesCarriere: "Sites carrière",
   jsearch: "Google Jobs (LinkedIn, Indeed, WTTJ…)",
   adzuna: "Adzuna",
   jooble: "Jooble"
@@ -87,11 +88,17 @@ let offerIndex: OfferIndexFn | null = null;
 export function setOfferIndex(fn: OfferIndexFn | null) {
   offerIndex = fn;
 }
+/** Offres publiées sur les sites des employeurs (base d'offres, collecte des pages carrière). */
+let siteIndex: OfferIndexFn | null = null;
+export function setSiteIndex(fn: OfferIndexFn | null) {
+  siteIndex = fn;
+}
 
 export function getSourceStatus(): Record<SourceKey, boolean> {
   return {
     laBonneAlternance: !!process.env.LBA_API_KEY,
     franceTravail: !!(process.env.FT_CLIENT_ID && process.env.FT_CLIENT_SECRET),
+    sitesCarriere: !!siteIndex,
     jsearch: !!process.env.JSEARCH_API_KEY,
     adzuna: !!(process.env.ADZUNA_APP_ID && process.env.ADZUNA_APP_KEY),
     jooble: !!process.env.JOOBLE_API_KEY
@@ -814,7 +821,7 @@ async function searchJooble(params: SearchParams, geo: GeoPoint | null): Promise
 // ---------------------------------------------------------------------------
 
 /** Ordre de préférence quand la même offre vient de plusieurs sources (fiche la plus complète d'abord). */
-const SOURCE_PRIORITY: SourceKey[] = ["franceTravail", "laBonneAlternance", "jsearch", "adzuna", "jooble"];
+const SOURCE_PRIORITY: SourceKey[] = ["franceTravail", "laBonneAlternance", "sitesCarriere", "jsearch", "adzuna", "jooble"];
 
 function locationTokens(loc: string): Set<string> {
   return new Set(norm(loc).replace(/[^a-z\s-]/g, " ").split(/[\s-]+/).filter((w) => w.length > 2 && !["rue", "avenue", "boulevard", "france", "cedex"].includes(w)));
@@ -897,6 +904,7 @@ export async function searchRealJobs(params: SearchParams): Promise<RealSearchRe
   const plan: { key: SourceKey; run: () => Promise<JobOffer[]> }[] = [];
   const skip = (k: SourceKey, why: string) => { if (status[k]) sources[k].skipped = why; };
   let ftFull = false;
+  let siteFull = false;
 
   if (status.franceTravail) {
     if (contract === "stage") skip("franceTravail", "pas d'offres de stage");
@@ -920,6 +928,14 @@ export async function searchRealJobs(params: SearchParams): Promise<RealSearchRe
     if (page > 1) skip("laBonneAlternance", "tous les résultats sont sur la première page");
     else if (contract === "tous" || contract === "alternance") plan.push({ key: "laBonneAlternance", run: () => searchLba(params, geo) });
     else skip("laBonneAlternance", "alternance uniquement");
+  }
+  if (status.sitesCarriere) {
+    // Pas de codes métier sur ces offres : mots-clés seulement
+    plan.push({ key: "sitesCarriere", run: async () => {
+      const r = await siteIndex!(params, geo, async () => []);
+      if (r) siteFull = r.full;
+      return r?.jobs || [];
+    } });
   }
   if (status.adzuna) plan.push({ key: "adzuna", run: () => searchAdzuna(params, geo) });
   if (status.jsearch) {
@@ -950,7 +966,7 @@ export async function searchRealJobs(params: SearchParams): Promise<RealSearchRe
   });
 
   const rawCount = (k: SourceKey) => byKey.get(k)?.length || 0;
-  const hasMore = ftFull || rawCount("adzuna") >= 45 || rawCount("jsearch") >= 10 || rawCount("jooble") >= 40;
+  const hasMore = ftFull || siteFull || rawCount("adzuna") >= 45 || rawCount("jsearch") >= 10 || rawCount("jooble") >= 40;
 
   // Agrégateurs : on écarte les offres sans rapport avec la recherche
   if (hasQuery) {

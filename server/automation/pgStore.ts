@@ -33,7 +33,7 @@ export class PgAutomationStore implements AutomationStore {
   static fromEnv(): PgAutomationStore | null {
     const url = process.env.AUTOMATION_DATABASE_URL;
     if (!url) return null;
-    return new PgAutomationStore(new pg.Pool({ connectionString: url, max: 5, ssl: needsSsl(url) ? { rejectUnauthorized: false } : undefined }));
+    return new PgAutomationStore(new pg.Pool({ connectionString: url, max: 8, ssl: needsSsl(url) ? { rejectUnauthorized: false } : undefined }));
   }
 
   private async q<T = any>(text: string, values: unknown[] = []): Promise<T[]> {
