@@ -116,7 +116,7 @@ export interface DossierVersion {
   tailoredContent?: TailoredCv;
 }
 
-export type JobOrigin = 'la-bonne-alternance' | 'france-travail' | 'jsearch' | 'adzuna' | 'jooble' | 'demo' | 'ia-web';
+export type JobOrigin = 'la-bonne-alternance' | 'france-travail' | 'jsearch' | 'adzuna' | 'jooble' | 'demo' | 'ia-web' | 'ats' | 'web-post' | 'web';
 
 export interface JobOffer {
   id: string;
@@ -151,6 +151,14 @@ export interface JobOffer {
   skillsRequired: string[];
   source: string;
   applyUrl: string;
+  /** Adresse de candidature publiée par le recruteur (France Travail, publication). */
+  contactEmail?: string;
+  /** Identifiant de candidature La bonne alternance (envoi direct par leur API officielle). */
+  lbaRecipientId?: string;
+  /** Publication d'un recruteur (LinkedIn, site…) et non annonce structurée : à vérifier. */
+  isPost?: boolean;
+  /** Extrait de la publication d'origine. */
+  postExcerpt?: string;
   publishedAt: string;
   domain?: string;
   status?: 'active' | 'expired';
