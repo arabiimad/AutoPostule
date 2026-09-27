@@ -270,3 +270,13 @@ test('suivi des réponses non autorisé : rien n’est lu', async () => {
   await s.drain();
   assert.equal(read, false);
 });
+
+test('tous les métiers : offre sans compétences reconnues → dossier préparé et validation demandée, aucun envoi', async () => {
+  const s = setup();
+  s.store.profiles.set(U, { ...profile, title: 'Développeur web' });
+  await s.add(offer('t1', { title: 'Développeur web H/F', skillsRequired: [], description: 'Envoyez votre CV à recrutement@t1.fr' }));
+  await s.drain();
+  assert.equal(s.sent.length, 0);
+  assert.equal(s.status('t1'), 'needs_user');
+  assert.match(s.store.applications.get(`${U}:${autoApplicationId('t1')}`)!.automation.reason, /non évaluable/);
+});

@@ -12,7 +12,7 @@ import { KanbanCrmView } from './components/KanbanCrmView';
 import { InterviewCockpitModal } from './components/InterviewCockpitModal';
 import { MasterProfileView } from './components/MasterProfileView';
 import { AuthModal } from './components/AuthModal';
-import { NewPasswordModal } from './components/NewPasswordModal';
+import { ResetPasswordModal } from './components/ResetPasswordModal';
 import { PricingView } from './components/PricingView';
 import { OfferMatchView } from './components/OfferMatchView';
 import { UpgradeModal } from './components/UpgradeModal';
@@ -168,7 +168,9 @@ export default function App() {
   const [checkingAlerts, setCheckingAlerts] = useState(false);
   const [notificationsOn, setNotificationsOn] = useState(notificationsAllowed());
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('register');
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'forgot'>('register');
+  /** Arrivée par le lien « mot de passe oublié » (ou lien expiré). */
+  const [passwordRecovery, setPasswordRecovery] = useState<cloud.RecoveryState | null>(null);
   const [authReason, setAuthReason] = useState<string | undefined>(undefined);
   const [cvUploadModalOpen, setCvUploadModalOpen] = useState(false);
   const [isMandatoryOnboarding, setIsMandatoryOnboarding] = useState(false);
@@ -209,9 +211,6 @@ export default function App() {
   const outboxRef = useRef<Outbox | null>(null);
   const savedProfileRef = useRef<UserProfile | null>(null);
   const [syncState, setSyncState] = useState<SyncState>('saved');
-  // Lien « mot de passe oublié » : choix du nouveau mot de passe
-  const [recoveryOpen, setRecoveryOpen] = useState(false);
-  useEffect(() => cloud.onPasswordRecovery(() => setRecoveryOpen(true)), []);
   const jobsMetaRef = useRef<JobsMeta>(jobsMeta);
   jobsMetaRef.current = jobsMeta;
   const loadingMoreRef = useRef(false);
@@ -285,7 +284,7 @@ export default function App() {
   /** Onglets ouverts aux visiteurs : la recherche d'offres et les tarifs. */
   // Offres, tarifs et outils publics (vérificateur ATS, comparaison CV / offre) restent ouverts aux visiteurs
   const showGate = isGatedForVisitor(currentTab, gated);
-  const openAuth = (mode: 'login' | 'register', reason?: string) => {
+  const openAuth = (mode: 'login' | 'register' | 'forgot', reason?: string) => {
     setAuthReason(reason);
     setAuthModalMode(mode);
     setAuthModalOpen(true);
@@ -384,6 +383,11 @@ export default function App() {
 
     let unsubApps: (() => void) | null = null;
 
+    const unsubRecovery = cloud.onPasswordRecovery((state) => {
+      setAuthModalOpen(false);
+      setPasswordRecovery(state);
+    });
+
     const unsubscribe = cloud.onAuthChange(async (user) => {
       if (unsubApps) {
         unsubApps();
@@ -450,6 +454,7 @@ export default function App() {
 
     return () => {
       unsubscribe();
+      unsubRecovery();
       if (unsubApps) unsubApps();
     };
   }, []);
@@ -1497,6 +1502,18 @@ export default function App() {
 
 
       {/* AUTHENTICATION & ACCOUNT CREATION MODAL */}
+      {passwordRecovery && (
+        <ResetPasswordModal
+          state={passwordRecovery}
+          onClose={() => { cloud.dismissPasswordRecovery(); setPasswordRecovery(null); }}
+          onDone={() => {
+            setPasswordRecovery(null);
+            showToast('Mot de passe modifié', 'Votre nouveau mot de passe est enregistré : vous êtes connecté.');
+          }}
+          onRequestNewLink={() => { cloud.dismissPasswordRecovery(); setPasswordRecovery(null); openAuth('forgot'); }}
+        />
+      )}
+
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => { setAuthModalOpen(false); setAuthReason(undefined); }}
@@ -1526,7 +1543,8 @@ export default function App() {
 
       {/* CV UPLOAD & ONBOARDING ANALYSIS MODAL */}
       <CvUploadModal
-        isOpen={cvUploadModalOpen}
+        // Le choix du nouveau mot de passe passe avant l'accueil (les deux fenêtres se superposaient)
+        isOpen={cvUploadModalOpen && !passwordRecovery}
         onClose={() => {
           setCvUploadModalOpen(false);
           setIsMandatoryOnboarding(false);
@@ -1622,13 +1640,6 @@ export default function App() {
       )}
 
       {/* FLOATING TOAST NOTIFICATION */}
-      {recoveryOpen && (
-        <NewPasswordModal onDone={(ok) => {
-          setRecoveryOpen(false);
-          if (ok) showToast('Mot de passe modifié', 'Utilisez-le lors de vos prochaines connexions.');
-        }} />
-      )}
-
       {/* État de l'enregistrement en ligne (seulement quand ce n'est pas « tout est enregistré ») */}
       {syncState !== 'saved' && (
         <div role="status" aria-live="polite" className={`fixed z-[55] bottom-20 lg:bottom-6 left-4 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm ${syncState === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>

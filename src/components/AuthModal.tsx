@@ -21,7 +21,7 @@ interface AuthModalProps {
   onClose: () => void;
   /** extra : nom / titre saisis à l'inscription. Le profil en ligne est créé par App (un seul écrivain). */
   onSuccess: (user: User, isNewAccount: boolean, extra?: { fullName?: string; title?: string }) => void;
-  defaultMode?: 'login' | 'register';
+  defaultMode?: 'login' | 'register' | 'forgot';
   /** Pourquoi un compte est demandé (action du visiteur), affiché en sous-titre. */
   reason?: string;
 }

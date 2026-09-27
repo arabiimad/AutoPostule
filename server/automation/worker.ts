@@ -18,6 +18,7 @@ import { resolveApplyChannel, isAutomatable, type ApplyChannel } from "./channel
 import { MailSendError, decryptToken, encryptToken, sha256, type MailProvider, type OutgoingMail, type SendResult } from "./email.ts";
 import type { PreparedCv, PreparedLetter } from "../services/documents.ts";
 import type { FormInput, FormResult } from "./forms.ts";
+import { lbaMissingFields, type LbaApplyInput, type LbaResult } from "./lba.ts";
 
 export interface Outcome {
   status: Exclude<TaskStatus, "running">;
@@ -36,6 +37,8 @@ export interface WorkerDeps {
   /** Formulaire Lever / Greenhouse (navigateur côté serveur). beforeSubmit revérifie la pause juste avant le clic. */
   fetchReplies?(provider: MailProvider, token: string, destination: string, since: string): Promise<InboundMessage[]>;
   submitForm?(channel: Extract<ApplyChannel, { kind: "lever" | "greenhouse" }>, input: FormInput, beforeSubmit: () => Promise<boolean>): Promise<FormResult>;
+  /** API officielle de La bonne alternance (absente si LBA_API_KEY n'est pas configurée). */
+  applyLba?(input: LbaApplyInput): Promise<LbaResult>;
   now?: () => Date;
 }
 
@@ -88,6 +91,8 @@ export async function trackReplies(task: Task, deps: WorkerDeps): Promise<Outcom
   }
   let handled = 0;
   for (const a of await store.listTrackableAttempts(task.userId)) {
+    // La bonne alternance transmet la candidature depuis sa propre adresse : réponse non rattachable à un expéditeur connu
+    if (a.channel === "lba") continue;
     const isForm = a.channel !== "email";
     // Formulaires : réponses envoyées par le logiciel de recrutement au nom de l'entreprise
     const target = isForm ? (a.channel === "lever" ? "no-reply@hire.lever.co" : "no-reply@greenhouse.io") : a.destination;
@@ -170,7 +175,9 @@ export async function processOffer(task: Task, deps: WorkerDeps): Promise<Outcom
     return intervention("Ce canal n'est pas autorisé dans vos réglages d'automatisation.");
   }
   if (!ready.ok) return intervention(`Validation nécessaire avant l'envoi : ${ready.reasons.join(" ")}`);
+  if (q.review) return intervention(q.review);
   if (channel.kind === "lever" || channel.kind === "greenhouse") return submitByForm(task, deps, { profile, offer, channel, cv, letter, baseApp, dossier, intervention, now });
+  if (channel.kind === "lba") return submitByLba(task, deps, { profile, offer, channel, cv, letter, baseApp, dossier, intervention, now });
 
   // Messagerie connectée ?
   const conn = await store.getMailConnection(userId);
@@ -322,6 +329,66 @@ async function submitByForm(
   if (result.questions?.length) {
     await store.logEvent(task.userId, "questions", "Questions à compléter pour les prochaines candidatures.", { offerId: offer.id, questions: result.questions }, refs);
   }
+  return c.intervention(result.reason);
+}
+
+/** Envoi par l'API de La bonne alternance : mêmes garanties que l'email (réservation, pause, preuve, incertitude). */
+async function submitByLba(
+  task: Task,
+  deps: WorkerDeps,
+  c: { profile: any; offer: any; channel: Extract<ApplyChannel, { kind: "lba" }>; cv: PreparedCv; letter: PreparedLetter; baseApp: any; dossier: any; intervention: (reason: string, state?: string) => Promise<Outcome>; now: Date }
+): Promise<Outcome> {
+  const { store } = deps;
+  const { profile, offer, channel, now } = c;
+  if (!deps.applyLba) return c.intervention("Envoi par La bonne alternance indisponible sur ce serveur : votre dossier est prêt pour postuler sur leur site.");
+  const missing = lbaMissingFields(profile);
+  if (missing) return c.intervention(`${missing} Complétez votre profil pour que la candidature parte automatiquement.`);
+  const pdf = await deps.renderCvPdf(profile, c.cv, offer);
+  const cvName = `CV - ${String(profile.fullName || "Candidat").replace(/[\\/:*?"<>|]+/g, "")}.pdf`;
+  const reservation = await store.reserveAttempt({
+    userId: task.userId, offerId: offer.id, channel: "lba", destination: `lba:${channel.recipientId}`, profileVersion: profileVersion(profile),
+    documents: [{ kind: "cv", name: cvName, sha256: sha256(pdf), bytes: pdf.length }, { kind: "letter", name: "message", sha256: sha256(Buffer.from(c.letter.letter)), bytes: Buffer.byteLength(c.letter.letter) }],
+    answers: {}
+  });
+  if (!reservation.attemptId) {
+    switch (reservation.reason) {
+      case "DAILY_LIMIT": return retry("Limite quotidienne atteinte : envoi reporté à demain.", secondsUntilTomorrowParis(now));
+      case "ALREADY_ATTEMPTED": return done("Candidature déjà envoyée pour cette offre.");
+      default: return { status: "cancelled", message: "Automatisation désactivée ou en pause." };
+    }
+  }
+  const attemptId = reservation.attemptId;
+  const refs = { taskId: task.id, attemptId };
+
+  // Dernier contrôle (pause, désactivation) juste avant l'envoi
+  if ((await store.beginSubmission(attemptId)) !== "OK") return { status: "cancelled", message: "Envoi annulé : automatisation en pause ou désactivée." };
+
+  const result = await deps.applyLba({ recipientId: channel.recipientId, fullName: profile.fullName, email: profile.email, phone: profile.phone, cvPdf: pdf, cvFileName: cvName, letter: c.letter.letter });
+  if (result.status === "submitted") {
+    const proof = { site: "La bonne alternance", applicationId: result.id, recipientId: channel.recipientId };
+    await store.recordSubmission(attemptId, "submitted", proof);
+    await store.upsertApplication(task.userId, {
+      ...c.baseApp, ...c.dossier, status: "applied", appliedAt: now.toISOString(),
+      followUpAt: new Date(now.getTime() + 7 * 864e5).toISOString(),
+      automation: { state: "submitted", channel: "lba", target: channel.target, attemptId, proof, updatedAt: now.toISOString() },
+      logEvents: [{ timestamp: now.toLocaleString("fr-FR"), message: "Candidature transmise automatiquement au recruteur par La bonne alternance." }]
+    });
+    await store.logEvent(task.userId, "submitted", `Candidature envoyée à ${offer.company} (La bonne alternance).`, { offerId: offer.id, proof }, refs);
+    await store.notify(task.userId, { title: "Candidature envoyée", body: `${offer.title} — ${offer.company}`, url: "/?onglet=candidatures", tag: `offre-${offer.id}` }).catch(() => {});
+    return done("Candidature envoyée.");
+  }
+  if (result.status === "uncertain") {
+    await store.recordSubmission(attemptId, "uncertain", null, result.reason);
+    await store.upsertApplication(task.userId, {
+      ...c.baseApp, ...c.dossier, status: "prepared",
+      automation: { state: "uncertain", reason: "Résultat incertain : la candidature a peut-être été transmise ; ne la renvoyez pas sans vérifier.", channel: "lba", target: channel.target, attemptId, updatedAt: now.toISOString() }
+    });
+    await store.logEvent(task.userId, "uncertain", `Résultat incertain pour ${offer.company} (La bonne alternance).`, { offerId: offer.id }, refs);
+    return { status: "uncertain", message: result.reason };
+  }
+  // Rien n'est parti : la réservation est libérée pour un nouvel essai ou une action du candidat
+  await store.recordSubmission(attemptId, "failed", null, result.reason);
+  if (result.status === "retry") return retry(`${result.reason} Nouvel essai plus tard.`, 10 * 60);
   return c.intervention(result.reason);
 }
 

@@ -117,7 +117,7 @@ psql(`grant usage on schema auth to anon, authenticated, service_role;
 grant execute on all functions in schema auth to anon, authenticated, service_role;`);
 
 // Schéma de l'application (mêmes migrations qu'en production)
-for (const f of ['001_init.sql', '002_automation.sql', '003_push.sql', '004_sync.sql', '005_billing.sql']) psqlFile(path.join(root, 'supabase/migrations', f));
+for (const f of ['001_init.sql', '002_automation.sql', '003_push.sql', '004_sync.sql', '005_billing.sql', '006_lba_channel.sql']) psqlFile(path.join(root, 'supabase/migrations', f));
 
 docker('kareer-postgrest', 'postgrest/postgrest:v12.2.3', {
   PGRST_DB_URI: `postgres://${cred('authenticator')}@127.0.0.1:${PG_PORT}/${DB}`, PGRST_DB_SCHEMAS: 'public', PGRST_DB_ANON_ROLE: 'anon',

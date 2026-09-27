@@ -39,14 +39,15 @@ jobs:
       - name: LaTeX et pdftotext (compilation réelle des modèles de CV et contrôle ATS)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-lang-french poppler-utils
 
+      # Avant les tests unitaires : les tests des formulaires Lever / Greenhouse et du PDF lancent Chromium
+      - name: Navigateur (tests des formulaires, PDF et parcours de bout en bout)
+        run: npx playwright install --with-deps chromium
+
       - name: Tests unitaires
         run: npm test
 
       - name: Build (interface + serveur)
         run: npm run build
-
-      - name: Navigateur pour les tests de bout en bout
-        run: npx playwright install --with-deps chromium
 
       - name: Tests de bout en bout (sources simulées)
         run: npm run test:e2e

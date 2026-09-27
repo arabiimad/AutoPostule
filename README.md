@@ -76,7 +76,7 @@ Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accè
 Comptes (e-mail + mot de passe, Google en option), profils et candidatures sont stockés dans Supabase (PostgreSQL, région UE). Chaque utilisateur ne voit que ses données (règles RLS). Sans configuration, l'application fonctionne en session locale (données dans le navigateur).
 
 1. Créez un projet sur supabase.com (région Europe).
-2. SQL Editor : exécutez `supabase/migrations/001_init.sql` (tables `profiles`, `applications`, `subscriptions`, `usage` + règles RLS).
+2. SQL Editor : exécutez dans l’ordre les migrations `supabase/migrations/001_init.sql` à `006_lba_channel.sql` (tables, règles RLS, file d’auto-candidature, notifications, synchronisation, facturation).
 3. `.env` : `SUPABASE_URL`, `SUPABASE_ANON_KEY` (clé publishable), `SUPABASE_SERVICE_ROLE_KEY` (serveur uniquement, jamais dans le navigateur), et pour l'interface `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
 4. Authentication → URL Configuration : « Site URL » = l'adresse publique de l'application (liens de confirmation et de réinitialisation).
 5. Production : configurez un SMTP (Authentication → Emails) ; le service d'e-mail par défaut de Supabase est limité à quelques envois par heure.
@@ -101,6 +101,19 @@ Activer le paiement (Stripe) :
 2. `STRIPE_SECRET_KEY=sk_test_…` (Développeurs → Clés API).
 3. Webhook (Développeurs → Webhooks) vers `https://votre-domaine/api/billing/webhook`, évènements `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted` : `STRIPE_WEBHOOK_SECRET=whsec_…`. En local : `stripe listen --forward-to localhost:3000/api/billing/webhook`.
 4. Portail client (Paramètres → Billing → Customer portal) : activez la résiliation et la mise à jour de la carte.
+
+## Découverte d'offres et envoi La bonne alternance (auto-candidature)
+
+La recherche planifiée du worker ne se limite pas aux sites d'emploi (`server/discovery/`) :
+
+- **Pages carrière des entreprises** (Greenhouse, Lever, Ashby, SmartRecruiters) : chaque lien vers l'une d'elles rencontré dans une recherche enregistre la page (liste partagée, Redis si configuré), relue ensuite pour tous les candidats. Seules les offres dont l'intitulé contient tous les mots du métier recherché sont gardées. Les offres Lever et Greenhouse partent ensuite par le formulaire déjà pris en charge.
+- **Publications « on recrute »** (LinkedIn, sites d'entreprises…) via la recherche Google de Gemini : lecture des résultats publics seulement, sans connexion à LinkedIn. Une offre n'est gardée que si son lien fait partie des pages réellement consultées par la recherche : un lien inventé est écarté. L'adresse de candidature citée dans la publication est reprise.
+- **France uniquement** dans cette version (`regions.ts`, prévu pour ajouter d'autres pays).
+- **Tous les métiers** : une offre dont les compétences ne sont pas reconnues par le catalogue n'est plus écartée si son intitulé correspond au métier recherché ; le dossier est préparé et **validé par le candidat** (jamais d'envoi automatique à l'aveugle).
+
+Canaux d'envoi ajoutés :
+- **La bonne alternance** : API officielle `POST /job/v1/apply` (migration `006_lba_channel.sql`). Mêmes garanties que l'email : réservation, pause revérifiée, preuve, résultat incertain jamais renvoyé.
+- **Adresse de candidature France Travail** (`contact.courriel` de l'offre) : envoi par email depuis la boîte du candidat.
 
 ## Mise en production
 

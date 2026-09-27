@@ -93,17 +93,28 @@ try {
   const resetLink = resetMail && linkIn(resetMail);
   check('e-mail de réinitialisation reçu', !!resetLink && /type=recovery/.test(resetLink), resetLink || '');
   await p2.goto(resetLink);
-  await p2.getByText('Choisissez un nouveau mot de passe').waitFor({ timeout: 15000 }).catch(() => {});
-  check('lien de réinitialisation : écran « nouveau mot de passe »', await p2.getByText('Choisissez un nouveau mot de passe').isVisible());
+  const resetDialog = p2.getByRole('dialog', { name: 'Nouveau mot de passe' });
+  await resetDialog.waitFor({ timeout: 15000 }).catch(() => {});
+  check('lien de réinitialisation : écran « nouveau mot de passe »', await resetDialog.isVisible());
   const newPassword = `Nouveau-${stamp}-2`;
-  await p2.getByLabel('Nouveau mot de passe', { exact: true }).and(p2.locator('input')).fill(newPassword);
-  await p2.getByLabel('Confirmez le mot de passe').fill(newPassword);
-  await p2.getByRole('button', { name: /Enregistrer le nouveau mot de passe/ }).click();
+  await p2.locator('#new-password').fill(newPassword);
+  await p2.locator('#confirm-password').fill(newPassword);
+  await p2.getByRole('button', { name: 'Enregistrer le mot de passe' }).click();
   await p2.getByText('Mot de passe modifié').waitFor({ timeout: 10000 }).catch(() => {});
   check('nouveau mot de passe enregistré', await p2.getByText('Mot de passe modifié').isVisible());
   const tokenOld = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, { method: 'POST', headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
   const tokenNew = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, { method: 'POST', headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: newPassword }) });
   check('ancien mot de passe refusé, nouveau accepté', tokenOld.status === 400 && tokenNew.status === 200, `${tokenOld.status}/${tokenNew.status}`);
+
+  // Le même lien, réutilisé : écran « Lien expiré » avec demande d'un nouveau lien
+  const ctx3 = await browser.newContext({ locale: 'fr-FR' });
+  const p3 = await ctx3.newPage();
+  p3.on('pageerror', (e) => errors.push(e.message));
+  await p3.goto(resetLink);
+  const expired = p3.getByRole('dialog', { name: 'Lien expiré' });
+  await expired.waitFor({ timeout: 15000 }).catch(() => {});
+  check('lien déjà utilisé : « Lien expiré », nouveau lien proposé', await expired.isVisible() && await p3.getByRole('button', { name: 'Recevoir un nouveau lien' }).isVisible());
+  await ctx3.close();
 
   // Session expirée : le jeton d'accès est renouvelé automatiquement (reste connecté)
   await p2.evaluate(() => {

@@ -44,7 +44,7 @@ before(async () => {
   if (skip) return;
   const base = [...ARGS];
   execFileSync('psql', [...base, '-d', 'postgres', '-qc', `drop database if exists ${DB}`, '-c', `create database ${DB}`]);
-  for (const f of ['tests/sql/supabase-shim.sql', 'supabase/migrations/001_init.sql', 'supabase/migrations/002_automation.sql', 'supabase/migrations/003_push.sql']) {
+  for (const f of ['tests/sql/supabase-shim.sql', 'supabase/migrations/001_init.sql', 'supabase/migrations/002_automation.sql', 'supabase/migrations/003_push.sql', 'supabase/migrations/006_lba_channel.sql']) {
     execFileSync('psql', [...base, '-d', DB, '-v', 'ON_ERROR_STOP=1', '-q', '-f', f], { stdio: ['ignore', 'ignore', 'pipe'] });
   }
   pool = new pg.Pool({ host: arg('-h'), port: Number(arg('-p') || 5432), user: arg('-U'), password: process.env.PGPASSWORD, database: DB });

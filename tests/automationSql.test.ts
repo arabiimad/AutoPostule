@@ -24,7 +24,7 @@ const B = '00000000-0000-0000-0000-00000000000b';
 before(async () => {
   if (skip) return;
   execFileSync('psql', [...CONN, '-d', 'postgres', '-qc', `drop database if exists ${DB}`, '-c', `create database ${DB}`]);
-  for (const f of ['tests/sql/supabase-shim.sql', 'supabase/migrations/001_init.sql', 'supabase/migrations/002_automation.sql', 'supabase/migrations/003_push.sql']) {
+  for (const f of ['tests/sql/supabase-shim.sql', 'supabase/migrations/001_init.sql', 'supabase/migrations/002_automation.sql', 'supabase/migrations/003_push.sql', 'supabase/migrations/006_lba_channel.sql']) {
     execFileSync('psql', [...CONN, '-d', DB, '-v', 'ON_ERROR_STOP=1', '-q', '-f', f], { stdio: ['ignore', 'ignore', 'pipe'] });
   }
   await sql(`insert into auth.users (id, email) values ('${A}', 'a@test.fr'), ('${B}', 'b@test.fr')`);

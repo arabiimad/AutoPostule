@@ -26,7 +26,7 @@ test('critères bloquants : contrat, lieu, exclusions, expiration, spontanée', 
     [offer({ isSpontaneous: true }), {}, /spontanée/],
     [offer({ title: 'Comptable' }), {}, /métiers/],
     [offer({ skillsRequired: ['Java', 'Spring', 'Kafka'] }), {}, /Adéquation/],
-    [offer({ skillsRequired: [] }), {}, /non évaluable/]
+    [offer({ title: 'Chauffeur livreur', skillsRequired: [] }), { roles: [] }, /non évaluable|éloigné/]
   ];
   for (const [o, p, re] of cases) {
     const q = qualifyOffer(policy(p), profile, o);
@@ -41,4 +41,16 @@ test('télétravail complet : lieu non bloquant ; salaire minimal lu dans l’of
   assert.equal(qualifyOffer(policy({ minSalary: 40000 }), profile, offer({ salary: undefined })).ok, true, 'salaire inconnu : non bloquant');
   assert.equal(annualSalaryFloor('38k€ - 45k€'), 38000);
   assert.equal(annualSalaryFloor('2 500 € par mois'), 30000);
+});
+
+test('tous les métiers : sans compétences reconnues, retenue si l’intitulé correspond, mais à valider par le candidat', () => {
+  const aideSoignant = { title: 'Aide-soignante', targetRoles: ['Aide-soignant'], skills: ['Soins d’hygiène'], experiences: [{ title: 'Aide-soignante', company: 'EHPAD', bullets: ['Soins'] }] };
+  const q = qualifyOffer(policy({ roles: ['aide-soignant'], locations: [] }), aideSoignant, offer({ title: 'Aide-soignant(e) de nuit H/F', skillsRequired: [], description: 'EHPAD, soins' }));
+  assert.equal(q.ok, true, q.reason);
+  assert.equal(q.score, null);
+  assert.match(q.review!, /vérifiez/);
+  // Métier non recherché : écartée
+  assert.equal(qualifyOffer(policy({ roles: [], locations: [] }), aideSoignant, offer({ title: 'Chauffeur livreur', skillsRequired: [] })).ok, false);
+  // Offre évaluable : pas de validation imposée par la politique
+  assert.equal(qualifyOffer(policy(), profile, offer()).review, undefined);
 });

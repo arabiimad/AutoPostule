@@ -4,6 +4,9 @@
  */
 import type { AutomationPolicy } from "./policy.ts";
 
+/** Canaux d'envoi réel ; « lba » : API officielle de La bonne alternance (transmission par email au recruteur). */
+export type SubmissionChannel = "email" | "lever" | "greenhouse" | "lba";
+
 export type TaskKind = "search" | "process_offer" | "verify_submission" | "track_replies";
 export type TaskStatus = "queued" | "running" | "done" | "failed" | "needs_user" | "uncertain" | "cancelled";
 export type AttemptStatus = "reserved" | "submitting" | "submitted" | "confirmed" | "uncertain" | "failed" | "needs_user" | "cancelled";
@@ -34,7 +37,7 @@ export interface TrackableAttempt {
   offerId: string;
   company: string;
   title: string;
-  channel: "email" | "lever" | "greenhouse";
+  channel: SubmissionChannel;
   destination: string;
   status: AttemptStatus;
   since: string;
@@ -43,7 +46,7 @@ export interface TrackableAttempt {
 export interface ReserveInput {
   userId: string;
   offerId: string;
-  channel: "email" | "lever" | "greenhouse";
+  channel: SubmissionChannel;
   destination: string;
   profileVersion: string;
   documents: { kind: string; name: string; sha256: string; bytes: number }[];

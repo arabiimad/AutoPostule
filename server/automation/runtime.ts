@@ -3,6 +3,9 @@
  * PDF (rendu Web Chromium), messagerie (Gmail, Outlook).
  */
 import { searchRealJobs } from "../jobSources.ts";
+import { discoverBeyondJobBoards, learnBoards } from "../discovery/discover.ts";
+import { groundedWebSearch, resolveGroundingUrl, webDiscoveryEnabled } from "../discovery/gemini.ts";
+import { activeRegion, isInRegion } from "../discovery/regions.ts";
 import { prepareCv, writeLetter, autonomousReadiness } from "../services/documents.ts";
 import { applyTailored } from "../cvPipeline.ts";
 import { renderCvHtml, generatePdfFromHtml } from "../pdf.ts";
@@ -13,10 +16,16 @@ import type { WorkerDeps } from "./worker.ts";
 import type { AutomationStore } from "./store.ts";
 import type { AutomationPolicy } from "./policy.ts";
 import { submitApplicationForm } from "./forms.ts";
+import { applyViaLba, lbaConfigured } from "./lba.ts";
 import type { Browser } from "playwright";
 
-export async function searchForPolicy(policy: AutomationPolicy): Promise<any[]> {
-  const roles = policy.roles.slice(0, 3);
+/**
+ * Offres pour la recherche planifiée : sites d'emploi et agrégateurs, puis pages carrière des entreprises
+ * et publications « on recrute » (discovery/). France uniquement dans cette version.
+ */
+export async function searchForPolicy(policy: AutomationPolicy, profile?: any): Promise<any[]> {
+  // Sans métier dans les réglages : titre et postes visés du profil
+  const roles = (policy.roles.length ? policy.roles : [...(profile?.targetRoles || []), profile?.title].filter(Boolean).map(String)).slice(0, 3);
   const locations = policy.locations.length ? policy.locations.slice(0, 2) : [""];
   const contract = policy.contracts.length === 1 ? policy.contracts[0] : "tous";
   const byId = new Map<string, any>();
@@ -26,7 +35,15 @@ export async function searchForPolicy(policy: AutomationPolicy): Promise<any[]> 
       for (const j of r.jobs) if (!byId.has(j.id)) byId.set(j.id, j);
     }
   }
-  return [...byId.values()];
+  // Pages carrière rencontrées dans les liens des offres : relues aux prochaines recherches
+  await learnBoards([...byId.values()].flatMap((j) => [j.applyUrl, ...(j.applyOptions || []).map((o: any) => o?.url), ...(j.alsoOn || []).map((o: any) => o?.url)]));
+  const beyond = await discoverBeyondJobBoards(
+    { roles, locations: policy.locations, contract },
+    webDiscoveryEnabled() ? { webSearch: groundedWebSearch, resolveUrl: resolveGroundingUrl } : {}
+  );
+  for (const j of beyond.jobs) if (!byId.has(j.id)) byId.set(j.id, j);
+  const region = activeRegion();
+  return [...byId.values()].filter((j) => isInRegion(j, region));
 }
 
 // Navigateur dédié aux formulaires (contexte neuf et isolé pour chaque candidature)
@@ -61,8 +78,9 @@ export function realDeps(store: AutomationStore, workerId: string): WorkerDeps {
     },
     sendMail: (provider, token, mail) => sendMail(provider, token, mail),
     refreshAccessToken: (provider, rt) => refreshAccessToken(provider, rt),
-    searchOffers: (policy) => searchForPolicy(policy),
+    searchOffers: (policy, profile) => searchForPolicy(policy, profile),
     fetchReplies: (provider, token, destination, since) => fetchReplies(provider, token, destination, since),
+    ...(lbaConfigured() ? { applyLba: (input) => applyViaLba(input) } : {}),
     async submitForm(channel, input, beforeSubmit) {
       const ctx = await (await browser()).newContext({ locale: "fr-FR", acceptDownloads: false });
       try {
