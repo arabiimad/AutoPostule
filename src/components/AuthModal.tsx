@@ -47,6 +47,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
+  /** Secondes avant de pouvoir redemander un lien (évite d'atteindre la limite d'e-mails). */
+  const [resetCooldown, setResetCooldown] = useState(0);
+  React.useEffect(() => {
+    if (resetCooldown <= 0) return;
+    const t = setTimeout(() => setResetCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resetCooldown]);
 
   // La fenêtre reste montée : à chaque ouverture, on affiche l'onglet demandé (« Connexion » ou « Créer un compte »)
   React.useEffect(() => {
@@ -166,9 +173,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setLoading(true);
     try {
       await cloud.resetPassword(email.trim());
-      setSuccessNotice('Si un compte existe pour cette adresse, un e-mail de réinitialisation vient d’être envoyé.');
+      setSuccessNotice('Si un compte existe pour cette adresse, un e-mail de réinitialisation vient d’être envoyé. Pensez à vérifier les indésirables.');
+      setResetCooldown(60);
     } catch (err: any) {
       setErrorMessage(cloud.authErrorMessage(err));
+      const wait = String(err?.message || '').match(/after (\d+) seconds?/i);
+      if (wait) setResetCooldown(Number(wait[1]));
     } finally {
       setLoading(false);
     }
@@ -472,8 +482,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
             </div>
 
-            <Button type="submit" variant="primary" size="lg" disabled={loading} className="w-full">
-              {loading ? 'Envoi…' : 'Envoyer le lien de réinitialisation'}
+            <Button type="submit" variant="primary" size="lg" disabled={loading || resetCooldown > 0} className="w-full">
+              {loading ? 'Envoi…' : resetCooldown > 0 ? `Nouvel envoi possible dans ${resetCooldown} s` : 'Envoyer le lien de réinitialisation'}
             </Button>
 
             <div className="text-center">
