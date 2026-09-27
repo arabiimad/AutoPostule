@@ -1,11 +1,14 @@
 import type { Express } from "express";
 import { searchRealJobs, hasRealSources, getSourceStatus } from "../jobSources.ts";
+import { enableOfferIndexFromEnv } from "../ingest/offerSearch.ts";
 import { kv, getQuotaUsage } from "../store.ts";
 import { getGeminiClient, callGeminiResilient, MODEL_FAST } from "../ai.ts";
 import { searchLocalJobs, stableJobId } from "../demoJobs.ts";
 import { logEvent } from "../log.ts";
 
 export function registerJobRoutes(app: Express) {
+  // Base d'offres (collecte continue) pour la partie France Travail des recherches : JOBS_INDEX=on
+  void enableOfferIndexFromEnv().then((on) => { if (on) logEvent("info", "job_index_enabled", {}); }).catch(() => {});
   // 1. Recherche d'offres
   //    - sources réelles (La bonne alternance, France Travail) si des clés sont configurées ;
   //    - sinon base de démonstration (+ recherche web IA facultative, signalée comme telle).

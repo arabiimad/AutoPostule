@@ -44,6 +44,8 @@ export interface SearchParams {
 export interface SourceReport {
   enabled: boolean;
   count: number;
+  /** Offres lues dans la base d'offres (collecte continue) plutôt qu'auprès de l'API. */
+  via?: "base";
   error?: string;
   /** Source configurée mais non interrogée pour cette recherche (raison). */
   skipped?: string;
@@ -77,6 +79,13 @@ let fetchImpl: FetchLike = (url, init) => {
 };
 export function __setFetchForTests(f: FetchLike) {
   fetchImpl = f;
+}
+
+/** Recherche dans la base d'offres pour France Travail (voir server/ingest/offerSearch.ts). */
+export type OfferIndexFn = (params: SearchParams, geo: GeoPoint | null, romes: () => Promise<string[]>) => Promise<{ jobs: JobOffer[]; full: boolean } | null>;
+let offerIndex: OfferIndexFn | null = null;
+export function setOfferIndex(fn: OfferIndexFn | null) {
+  offerIndex = fn;
 }
 
 export function getSourceStatus(): Record<SourceKey, boolean> {
@@ -892,6 +901,15 @@ export async function searchRealJobs(params: SearchParams): Promise<RealSearchRe
   if (status.franceTravail) {
     if (contract === "stage") skip("franceTravail", "pas d'offres de stage");
     else plan.push({ key: "franceTravail", run: async () => {
+      // Base d'offres (collecte continue) si disponible : instantané, sans quota ; sinon API en direct
+      if (offerIndex) {
+        const fromIndex = await offerIndex(params, geo, () => resolveRomes(params.query || ""));
+        if (fromIndex) {
+          sources.franceTravail.via = "base";
+          ftFull = fromIndex.full;
+          return fromIndex.jobs;
+        }
+      }
       const r = await searchFranceTravail(params, geo);
       if (r.warning) warnings.push(r.warning);
       ftFull = !!r.full;
