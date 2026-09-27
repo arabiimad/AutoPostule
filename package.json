@@ -14,6 +14,7 @@
     "lint": "node node_modules/typescript/bin/tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "check:sources": "node --import tsx scripts/check-sources.ts",
+    "check:prod": "node --import tsx scripts/preflight.ts",
     "test:e2e": "node e2e/run.mjs",
     "test:e2e:worker": "node --import tsx e2e/worker.e2e.ts",
     "test:e2e:automation": "node --import tsx e2e/automation-ui.e2e.ts",

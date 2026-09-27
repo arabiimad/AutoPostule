@@ -81,6 +81,7 @@ Comptes (e-mail + mot de passe, Google en option), profils et candidatures sont 
 4. Authentication → URL Configuration : « Site URL » = l'adresse publique de l'application (liens de confirmation et de réinitialisation).
 5. Production : configurez un SMTP (Authentication → Emails) ; le service d'e-mail par défaut de Supabase est limité à quelques envois par heure.
 6. Connexion Google (facultatif) : Authentication → Providers → Google, puis `VITE_AUTH_GOOGLE=on`.
+7. Avant la mise en production : `npm run check:prod` vérifie les variables (sans afficher les valeurs), les migrations appliquées et l’accès à Supabase, puis affiche les adresses de retour OAuth à déclarer chez Google et Microsoft.
 
 ## Forfaits (freemium) et paiement
 
