@@ -231,6 +231,13 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
     return res.json({ success: true, saved: items.length, requeued: requeued.length });
   });
 
+  // Supervision (exploitant uniquement : ADMIN_UIDS, identifiants de comptes séparés par des virgules)
+  app.get("/api/admin/automation", auth, limiter, guard, async (req: any, res) => {
+    const admins = String(process.env.ADMIN_UIDS || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (!admins.includes(req.uid)) return res.status(403).json({ success: false, error: "Accès réservé à l'exploitant." });
+    return res.json(await new PgAutomationStore(db()!).supervision());
+  });
+
   // Notifications sur cet appareil (Web Push)
   app.post("/api/automation/push", auth, limiter, guard, async (req: any, res) => {
     const sub = req.body?.subscription;

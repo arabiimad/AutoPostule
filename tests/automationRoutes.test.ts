@@ -175,3 +175,12 @@ test('notifications : abonnement de l’appareil enregistré puis supprimé, adr
   await call('DELETE', '/api/automation/push', A, { endpoint: sub.endpoint });
   assert.equal((await q(`select count(*)::int as n from public.push_subscriptions`))[0].n, 0);
 });
+
+test('supervision : réservée aux comptes exploitants', { skip }, async () => {
+  process.env.ADMIN_UIDS = B;
+  assert.equal((await call('GET', '/api/admin/automation', A)).status, 403);
+  const r = await call('GET', '/api/admin/automation', B);
+  assert.equal(r.status, 200);
+  assert.ok('tasks' in r.json && 'users' in r.json);
+  delete process.env.ADMIN_UIDS;
+});

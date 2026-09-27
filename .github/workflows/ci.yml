@@ -36,6 +36,9 @@ jobs:
       - name: Vérification des types
         run: npm run lint
 
+      - name: LaTeX et pdftotext (compilation réelle des modèles de CV et contrôle ATS)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends texlive-latex-base texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-lang-french poppler-utils
+
       - name: Tests unitaires
         run: npm test
 

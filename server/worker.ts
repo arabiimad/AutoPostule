@@ -15,6 +15,7 @@ import { realDeps, closeFormBrowser } from "./automation/runtime.ts";
 import { runOnce } from "./automation/worker.ts";
 import { closeWebPdf } from "./pdf.ts";
 import { logEvent } from "./log.ts";
+import { captureError, initMonitoring } from "./monitoring.ts";
 
 dotenv.config();
 
@@ -36,6 +37,7 @@ const deps = realDeps(store, workerId);
 
 let stopping = false;
 let lastMaintenance = 0;
+let lastPurge = 0;
 
 async function tick() {
   if (Date.now() - lastMaintenance > 5 * 60_000) {
@@ -46,12 +48,25 @@ async function tick() {
       store!.scheduleReplyTracking(3)
     ]);
     if (scheduled || swept || tracking) logEvent("info", "automation_maintenance", { scheduled, swept, tracking });
+    // Alerte : traitements bloqués (bail expiré) ou en retard → journal d'erreur (Sentry si configuré)
+    const sup = await store!.supervision();
+    if (sup.tasks?.stuck || sup.tasks?.late > 10) {
+      logEvent("error", "automation_backlog", { stuck: sup.tasks.stuck, late: sup.tasks.late });
+      captureError(new Error(`Auto-candidature : ${sup.tasks.stuck} traitement(s) bloqué(s), ${sup.tasks.late} en retard`), { stuck: sup.tasks.stuck, late: sup.tasks.late });
+    }
+  }
+  // Conservation des preuves : une fois par jour
+  if (Date.now() - lastPurge > 24 * 3600_000) {
+    lastPurge = Date.now();
+    const purged = await store!.purgeOld(Number(process.env.AUTOMATION_PROOF_DAYS) || 180);
+    logEvent("info", "automation_purge", purged);
   }
   // Traite tant qu'il y a du travail, puis attend
   while (!stopping && (await runOnce(deps, { limit: concurrency, leaseSeconds: 600 })) > 0) { /* lot suivant */ }
 }
 
 async function loop() {
+  await initMonitoring().catch(() => {});
   logEvent("info", "automation_worker_started", { workerId, pollMs, searchEveryHours, concurrency });
   while (!stopping) {
     try {

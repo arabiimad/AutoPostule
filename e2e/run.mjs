@@ -278,6 +278,19 @@ try {
   const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   check('mode sombre', await page.evaluate(() => document.documentElement.classList.contains('dark')) && bg !== 'rgb(246, 247, 249)', bg);
 
+  // Second import : profil existant → choix explicite, alerte si le CV est au nom d'une autre personne
+  await page.getByRole('button', { name: /Importer mon CV/ }).first().click();
+  await page.getByRole('button', { name: 'Coller le texte' }).click();
+  await page.getByLabel('Texte complet de votre CV').fill(`Julie Martin\nComptable\njulie@mail.fr\nEXPÉRIENCES PROFESSIONNELLES\nComptable - Cabinet Y | 2019 - 2023\nClôtures mensuelles\nCOMPÉTENCES\nSage, Excel`);
+  await page.getByRole('button', { name: /Analyser mon CV/ }).click();
+  await page.getByText('Votre profil contient déjà des informations').waitFor({ timeout: 15000 });
+  const reimport = await page.getByRole('dialog').innerText();
+  check('réimport : remplacer ou compléter, au choix', /Remplacer mon profil par ce CV/.test(reimport) && /Compléter mon profil actuel/.test(reimport));
+  check('réimport : CV d’une autre personne signalé', /au nom de « Julie Martin »/.test(reimport), reimport.slice(0, 300));
+  await page.getByRole('button', { name: /Annuler \(rien n’est enregistré\)/ }).click();
+  await page.waitForTimeout(300);
+  check('réimport annulé : profil inchangé', (await page.getByRole('dialog').count()) === 0 && !(await page.textContent('body')).includes('Julie Martin'));
+
   // Assistant : série de dossiers, file d'envoi, CV en PDF
   await page.locator('header nav button', { hasText: 'Assistant' }).click();
   await page.waitForTimeout(400);
