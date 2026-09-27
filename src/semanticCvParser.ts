@@ -263,64 +263,73 @@ const UNIVERSAL_SKILLS_CATALOG: { name: string; aliases: string[] }[] = [
   { name: 'Méthodologie Agile / Scrum', aliases: ['agile', 'scrum', 'kanban', 'jira'] }
 ];
 
-/** Nom de groupe (« Docker & Kubernetes », « Suite Adobe (Photoshop, …) ») : il couvre plusieurs outils distincts. */
-const isGroupName = (name: string) => /[&(),]|\s\/\s/.test(name);
-
-/** Libellé lisible d'un terme trouvé tel quel dans le texte (« docker » → « Docker », « aws » → « AWS »). */
-function displayTerm(found: string): string {
-  const t = found.trim();
-  if (t !== t.toLowerCase()) return t; // casse d'origine conservée (« MySQL », « GitLab »)
-  if ((t.length <= 4 || /^[a-z]{2,4}\/[a-z]{2,4}$/.test(t)) && !/\s/.test(t)) return t.toUpperCase();
-  return t.charAt(0).toUpperCase() + t.slice(1);
-}
-
-/**
- * Compétences reconnues dans un texte.
- * - par défaut (offres, contrôles) : nom du catalogue, éventuellement collectif (« Docker & Kubernetes ») ;
- * - `precise` (profil du candidat) : pour un nom collectif, seuls les outils réellement écrits dans le texte
- *   (« Docker » et non « Docker & Kubernetes »), pour ne rien ajouter au CV.
- */
-export function extractTechnologies(text: string, options: { precise?: boolean } = {}): string[] {
+export function extractTechnologies(text: string): string[] {
   const found: string[] = [];
   const lower = text.toLowerCase();
 
   for (const item of UNIVERSAL_SKILLS_CATALOG) {
-    const precise = options.precise && isGroupName(item.name);
     for (const rawAlias of item.aliases) {
       // « =XXX » : alias sensible à la casse (sigles ambigus : C, Go, Vue, IA, Word…)
       const strict = rawAlias.startsWith('=');
       const alias = strict ? rawAlias.slice(1) : rawAlias;
       try {
-        const regex = new RegExp(`(^|[^a-zA-Z0-9_#+À-ÿ])(${alias})([^a-zA-Z0-9_#+À-ÿ'’]|$)`, strict ? '' : 'i');
-        const m = text.match(regex);
-        if (m) {
-          if (!precise) {
-            found.push(item.name);
-            break;
-          }
-          found.push(displayTerm(m[2]));
+        const regex = new RegExp(`(^|[^a-zA-Z0-9_#+À-ÿ])${alias}([^a-zA-Z0-9_#+À-ÿ'’]|$)`, strict ? '' : 'i');
+        if (regex.test(text)) {
+          found.push(item.name);
+          break;
         }
       } catch {
         if (!strict && lower.includes(alias.toLowerCase())) {
-          if (!precise) {
-            found.push(item.name);
-            break;
-          }
-          const i = lower.indexOf(alias.toLowerCase());
-          found.push(displayTerm(text.slice(i, i + alias.length)));
+          found.push(item.name);
+          break;
         }
       }
     }
   }
 
-  // Dédoublonnage insensible à la casse
+  return Array.from(new Set(found));
+}
+
+/**
+ * Compétences telles qu'écrites dans le texte (« Docker », « PostgreSQL ») et non le nom de
+ * regroupement du catalogue (« Docker & Kubernetes ») : le profil ne doit contenir que ce que
+ * la personne a réellement mentionné.
+ */
+export function extractSkillMentions(text: string): string[] {
+  const found: Array<{ label: string; at: number }> = [];
   const seen = new Set<string>();
-  return found.filter(f => {
-    const k = f.toLowerCase();
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+  const spans: Array<[number, number]> = []; // « Node » ne doit pas être repris dans « Node.js »
+  for (const item of UNIVERSAL_SKILLS_CATALOG) {
+    const aliases = [...item.aliases].sort((a, b) => b.replace(/\\/g, '').length - a.replace(/\\/g, '').length);
+    for (const rawAlias of aliases) {
+      const strict = rawAlias.startsWith('=');
+      const alias = strict ? rawAlias.slice(1) : rawAlias;
+      let regex: RegExp;
+      try {
+        regex = new RegExp(`(^|[^a-zA-Z0-9_#+À-ÿ])(${alias})(?=[^a-zA-Z0-9_#+À-ÿ'’]|$)`, strict ? 'g' : 'gi');
+      } catch {
+        continue;
+      }
+      for (const m of text.matchAll(regex)) {
+        const raw = m[2].trim();
+        if (!raw) continue;
+        const start = (m.index ?? 0) + m[1].length;
+        const end = start + m[2].length;
+        if (spans.some(([a, b]) => start < b && end > a)) continue;
+        spans.push([start, end]);
+        // Casse de référence prise dans le nom du catalogue quand il contient le terme (postgresql → PostgreSQL)
+        const idx = item.name.toLowerCase().indexOf(raw.toLowerCase());
+        const inName = idx >= 0 && !/[a-zA-Z0-9]/.test(item.name[idx + raw.length] || '') && !/[a-zA-Z0-9]/.test(item.name[idx - 1] || '');
+        const label = inName ? item.name.slice(idx, idx + raw.length) : raw;
+        const key = label.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          found.push({ label, at: start });
+        }
+      }
+    }
+  }
+  return found.sort((a, b) => a.at - b.at).map((f) => f.label);
 }
 
 // ---------------------------------------------------------------------------
@@ -547,7 +556,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
   // Pas d'accroche inventée : si le CV n'en contient pas, le champ reste vide.
 
   // 3.7 Skills Extraction
-  const allDetectedSkills = extractTechnologies(text, { precise: true });
+  const allDetectedSkills = extractSkillMentions(text);
   const skillsSec = sections.find(s => s.type === 'skills');
   const sectionSkills: string[] = [];
   if (skillsSec) {
@@ -676,7 +685,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
         endDate: '',
         current: false,
         bullets: rawBullets.slice(0, 5),
-        technologies: extractTechnologies(rawBullets.join(' '), { precise: true }).slice(0, 5)
+        technologies: extractSkillMentions(rawBullets.join(' ')).slice(0, 5)
       });
     }
   }
@@ -747,7 +756,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
             id: `proj-${projects.length + 1}`,
             name: projName,
             description: projDesc || '',
-            technologies: extractTechnologies(`${projName} ${projDesc}`, { precise: true }).slice(0, 4)
+            technologies: extractSkillMentions(`${projName} ${projDesc}`).slice(0, 4)
           });
         }
         projName = l.replace(/^[:\s-]+/, '').trim();
@@ -761,7 +770,7 @@ export function parseCvSemantically(rawText: string): ExtractedCvData {
         id: `proj-${projects.length + 1}`,
         name: projName,
         description: projDesc || '',
-        technologies: extractTechnologies(`${projName} ${projDesc}`, { precise: true }).slice(0, 4)
+        technologies: extractSkillMentions(`${projName} ${projDesc}`).slice(0, 4)
       });
     }
   }
@@ -822,7 +831,7 @@ function finalizeExperience(rawExp: Partial<Experience> & { rawLines: string[] }
     }
   }
 
-  const techDetected = extractTechnologies(fullContent, { precise: true });
+  const techDetected = extractSkillMentions(fullContent);
 
   return {
     id: `exp-${Date.now()}-${index + 1}`,

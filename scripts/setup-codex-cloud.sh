@@ -10,10 +10,10 @@ if [[ "${INSTALL_LATEX:-0}" == "1" ]]; then
   if ! command -v pdflatex >/dev/null 2>&1; then
     if [[ "$(id -u)" == "0" ]]; then
       apt-get update
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra texlive-lang-french poppler-utils
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra texlive-lang-french lmodern poppler-utils
     else
       sudo apt-get update
-      sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra texlive-lang-french poppler-utils
+      sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra texlive-lang-french lmodern poppler-utils
     fi
   fi
 fi

@@ -1,13 +1,13 @@
 import React from 'react';
 import { Bookmark, BookmarkCheck, MapPin } from 'lucide-react';
 import type { Application, JobOffer } from '../../types';
-import type { CandidateMatch } from '../../utils/skillMatcher';
-import { Badge, CompanyAvatar, MatchRing, cx } from '../ui';
+import type { JobFit } from '../../utils/skillMatcher';
+import { Badge, CompanyAvatar, FitBadge, cx } from '../ui';
 import { CONTRACT_LABELS, REMOTE_LABELS, formatRelativeDate, sourceShortName } from '../../utils/format';
 
 interface JobCardProps {
   job: JobOffer;
-  match: CandidateMatch;
+  match: JobFit;
   showMatch: boolean;
   selected: boolean;
   application?: Application;
@@ -52,7 +52,6 @@ export const JobCard: React.FC<JobCardProps> = ({ job, match, showMatch, selecte
               <p className="mt-0.5 truncate text-sm text-slate-600">{job.company}</p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
-              {showMatch && <MatchRing score={match.score} size={38} />}
               <button
                 onClick={(e) => { e.stopPropagation(); onToggleSave(); }}
                 aria-label={saved ? 'Offre sauvegardée' : 'Sauvegarder l’offre'}
@@ -71,6 +70,7 @@ export const JobCard: React.FC<JobCardProps> = ({ job, match, showMatch, selecte
           )}
 
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            {showMatch && !job.isSpontaneous && <FitBadge level={match.level} />}
             {job.isSpontaneous && <Badge tone="sky" title="Entreprise qui recrute en alternance sans offre publiée">Candidature spontanée</Badge>}
             <Badge tone="brand">{CONTRACT_LABELS[job.contractType] || job.contractType}</Badge>
             {remote && <Badge>{remote}</Badge>}

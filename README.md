@@ -1,4 +1,4 @@
-# AutoPostule
+# Kareer
 
 Recherche d'offres multi-sources, CV LaTeX et lettre adaptés à chaque offre, suivi des candidatures, relances et préparation aux entretiens.
 
@@ -30,7 +30,7 @@ npm start                 # sert dist/ ; port = variable PORT (3000 par défaut)
 | `npm run test:e2e` | Parcours complet dans un vrai navigateur, sources simulées (après `npm run build` et `npx playwright install chromium`) |
 | `npm run check:sources -- "développeur web" Lyon alternance` | Teste vos vraies clés d'API : offres par source, erreurs, avertissements |
 | `npm run check:ai` | Teste la clé Gemini (modèles accessibles) et la génération d'un CV d'exemple |
-| `npm run deploy:rules` | Déploie les règles Firestore |
+| `npm run test:supabase` | Test réel contre votre projet Supabase : connexion, profil, candidatures, cloisonnement RLS (comptes de test créés puis supprimés) |
 
 Intégration continue : `.github/workflows/ci.yml` (types, tests, build et tests de bout en bout à chaque push sur GitHub).
 
@@ -62,33 +62,62 @@ L'IA ne produit jamais de LaTeX ; elle ne rédige que le contenu, qui est ensuit
 1. **Analyse de l'offre** (modèle rapide, résultat en cache 7 jours) : domaine, ton, exigences, missions, mots-clés.
 2. **Adaptation du contenu** (modèle le plus puissant) : titre, accroche, puces reformulées, ordre des expériences et des compétences, en JSON.
 3. **Garde-fous** : toute puce contenant un chiffre, un outil ou une compétence absents du profil est remplacée par le texte d'origine.
-4. **Mise en forme** : modèles LaTeX Classique, Moderne, Compact → le PDF compile toujours.
+4. **Relecture** : une seconde passe de l'IA compare chaque puce reformulée à l'original ; toute puce qui ajoute un fait revient au texte d'origine.
+5. **Mise en forme**, au choix dans le Studio :
+   - **Web** (par défaut) : mise en page HTML convertie en PDF par Chromium — aperçu instantané, aucun LaTeX requis. Installer le navigateur une fois : `npx playwright install chromium` (ou `PW_CHROMIUM_PATH` vers un Chromium existant ; `WEB_PDF=off` pour désactiver). Sans Chromium, le bouton PDF passe par l'impression du navigateur.
+   - **LaTeX** : modèles Classique, Moderne, Compact (pdfLaTeX, Tectonic ou Overleaf).
 
-Dans le Studio : onglet **Contenu** (retouche de chaque puce par l'IA avec des consignes, réordonnancement, masquage), **Aperçu** PDF intégré, changement de modèle sans perdre le contenu. `npm run check:ai` teste votre clé et affiche un CV adapté d'exemple.
+Dans le Studio : onglet **Contenu** (retouche de chaque puce par l'IA avec des consignes, réordonnancement, masquage), **Aperçu** intégré, changement de modèle sans perdre le contenu. `npm run check:ai` teste votre clé et affiche un CV adapté d'exemple.
 
 Modèle Pro : l'abonnement Google AI Pro (application Gemini) ne donne pas accès à l'API. Pour utiliser `gemini-3.1-pro-preview` via l'API, activez la facturation du projet Google Cloud lié à la clé (environ 2 $ / 12 $ par million de jetons en entrée / sortie, soit quelques centimes par CV). Sans facturation, l'application passe automatiquement sur Flash.
+
+## Comptes et base de données (Supabase)
+
+Comptes (e-mail + mot de passe, Google en option), profils et candidatures sont stockés dans Supabase (PostgreSQL, région UE). Chaque utilisateur ne voit que ses données (règles RLS). Sans configuration, l'application fonctionne en session locale (données dans le navigateur).
+
+1. Créez un projet sur supabase.com (région Europe).
+2. SQL Editor : exécutez `supabase/migrations/001_init.sql` (tables `profiles`, `applications`, `subscriptions`, `usage` + règles RLS).
+3. `.env` : `SUPABASE_URL`, `SUPABASE_ANON_KEY` (clé publishable), `SUPABASE_SERVICE_ROLE_KEY` (serveur uniquement, jamais dans le navigateur), et pour l'interface `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
+4. Authentication → URL Configuration : « Site URL » = l'adresse publique de l'application (liens de confirmation et de réinitialisation).
+5. Production : configurez un SMTP (Authentication → Emails) ; le service d'e-mail par défaut de Supabase est limité à quelques envois par heure.
+6. Connexion Google (facultatif) : Authentication → Providers → Google, puis `VITE_AUTH_GOOGLE=on`.
+
+## Forfaits (freemium) et paiement
+
+| | Gratuit | Premium (9,99 €/mois) |
+|---|---|---|
+| CV adaptés par l'IA | 3 / mois (modèle rapide) | 150 / mois (modèle Pro) |
+| Lettres de motivation | 3 / mois | 150 / mois |
+| Retouches et évaluations IA | 15 / mois | 600 / mois |
+| Préparations d'entretien | 3 / mois | 80 / mois |
+| Imports de CV | 5 / mois | 30 / mois |
+
+- Les quotas sont vérifiés par le serveur : table `usage` (Supabase) pour les comptes, compteur par adresse IP pour les visiteurs. Une réponse sans IA (repli, erreur) n'est pas décomptée. Au-delà : réponse `402 QUOTA_EXCEEDED` et fenêtre « Passer à Premium ».
+- Page **Tarifs** (`?onglet=tarifs`) : forfaits, consommation du mois, souscription et gestion de l'abonnement.
+- **Profil → Mes données** : export JSON de toutes les données et suppression définitive du compte (RGPD).
+
+Activer le paiement (Stripe) :
+1. Créez un compte Stripe (mode test pour commencer), puis un produit « Kareer Premium » avec un tarif récurrent mensuel : `STRIPE_PRICE_PREMIUM=price_…`.
+2. `STRIPE_SECRET_KEY=sk_test_…` (Développeurs → Clés API).
+3. Webhook (Développeurs → Webhooks) vers `https://votre-domaine/api/billing/webhook`, évènements `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted` : `STRIPE_WEBHOOK_SECRET=whsec_…`. En local : `stripe listen --forward-to localhost:3000/api/billing/webhook`.
+4. Portail client (Paramètres → Billing → Customer portal) : activez la résiliation et la mise à jour de la carte.
+
+## Mise en production
+
+- **Docker** : `docker build -t autopostule --build-arg VITE_SUPABASE_URL=… --build-arg VITE_SUPABASE_ANON_KEY=… .` puis `docker run -p 3000:3000 --env-file .env autopostule` (Chromium inclus pour les PDF). Compatible Render, Railway, Fly.io, Cloud Run, Scaleway.
+- **Suivi des erreurs** : `SENTRY_DSN` (serveur) et `VITE_SENTRY_DSN` (navigateur) ; les corps de requête (CV, profils) ne sont jamais envoyés.
+- **Mesure d'usage** : `VITE_POSTHOG_KEY` (PostHog UE, sans cookie, sans enregistrement de session) ; évènements : recherche, offre sauvegardée, candidature express, dossier validé, inscription, page Tarifs, quota atteint, paiement commencé.
 
 ## Autres variables
 
 | Variable | Rôle |
 |---|---|
 | `GEMINI_API_KEY` | IA (analyse du CV, CV et lettre sur mesure, kit d'entretien). Sans clé : modèles standards. |
-| `AUTH_MODE` | `off`, `optional` (défaut) ou `required` : vérification des comptes Firebase côté serveur |
+| `AUTH_MODE` | `off`, `optional` (défaut) ou `required` : vérification des comptes (jeton Supabase) côté serveur |
 | `PORT` | Port d'écoute |
 | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Facultatif : cache, limite de débit et quotas partagés entre plusieurs serveurs (Redis Upstash) |
+| `PDF_CONCURRENCY` | Nombre maximal de PDF Web générés en parallèle (3 par défaut) |
 | `LATEX_COMPILER` | `tectonic`, `pdflatex` ou `off` pour le bouton « Télécharger le PDF » |
-| `PDF_RENDERER` | `off` pour désactiver le rendu PDF par Chromium (utilisé quand LaTeX n'est pas installé) |
-| `CHROMIUM_PATH` | Chromium déjà installé sur la machine, si le navigateur de Playwright n'est pas téléchargé |
-
-## CV en PDF en production
-
-Le CV est compilé par LaTeX si `tectonic` ou `pdflatex` est installé ; sinon il est rendu par Chromium (Playwright) à partir du même contenu. Sur le serveur, après `npm ci` :
-
-```bash
-npx playwright install --with-deps chromium   # une fois, pour le rendu PDF sans LaTeX
-```
-
-Sans LaTeX ni Chromium, le bouton PDF est masqué et Overleaf reste proposé.
 
 ## Fonctionnalités
 

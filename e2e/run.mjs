@@ -1,7 +1,7 @@
 /**
  * Tests de bout en bout (navigateur réel, sources d'offres simulées).
  *
- *   npm run build            # construit dist/ (interface + serveur)
+ *   VITE_SUPABASE_URL= VITE_SUPABASE_ANON_KEY= npm run build   # dist/ en mode local (sans comptes en ligne)
  *   npx playwright install chromium   # une seule fois
  *   npm run test:e2e
  *
@@ -15,6 +15,7 @@ import { startMockSources } from './mock-sources.mjs';
 import { e2eServerEnv, MOCK_PORT, APP_PORT } from './env.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const outDir = process.env.E2E_OUT_DIR || (await import('node:os')).tmpdir();
 if (!fs.existsSync(path.join(root, 'dist', 'server.cjs'))) {
   console.error('dist/server.cjs introuvable : lancez d’abord « npm run build ».');
   process.exit(1);
@@ -68,6 +69,13 @@ try {
   const page2 = await (await fetch(`${BASE}/api/jobs/search`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'comptable', location: 'Avignon', page: 1 }) })).json();
   check('pagination serveur : d’autres pages annoncées', page2.hasMore === true && page2.jobs.filter((j) => /^Comptable/.test(j.title)).length === 50, `hasMore=${page2.hasMore} total=${page2.total}`);
 
+  const quotaRes = await (await fetch(`${BASE}/api/tailor/latex`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ candidate: cv.profile, job: { title: 'Poste QUOTA-E2E', company: 'Test', description: 'QUOTA-E2E', skillsRequired: [] } })
+  })).json();
+  check('quota IA épuisé : CV construit quand même, message clair sans détail technique',
+    !!quotaRes.latexCode && /très sollicité/.test(quotaRes.notice || '') && !/[{}]|googleapis|RESOURCE_EXHAUSTED|429|gemini/i.test(quotaRes.notice || ''), quotaRes.notice);
+
   // --- Parcours complet (bureau) ---------------------------------------------------------------------
   console.log('\nParcours bureau');
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true, locale: 'fr-FR' });
@@ -79,7 +87,9 @@ try {
 
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1200);
-  check('premiers pas affichés au premier lancement', await page.getByText('Bienvenue sur AutoPostule').isVisible());
+  check('marque Kareer : écran de démarrage remplacé, logo et titre', (await page.locator('#boot').count()) === 0
+    && await page.getByRole('button', { name: 'Kareer — accueil' }).isVisible() && /^Kareer/.test(await page.title()));
+  check('premiers pas affichés au premier lancement', await page.getByText('Bienvenue sur Kareer').isVisible());
 
   // Import du CV (texte collé)
   await page.getByRole('button', { name: /Importer mon CV/ }).first().click();
@@ -88,7 +98,7 @@ try {
   await page.getByRole('button', { name: /Analyser mon CV/ }).click();
   await page.getByRole('button', { name: /Confirmer et enregistrer/ }).click({ timeout: 15000 });
   await page.getByRole('button', { name: /Voir les offres/ }).click();
-  check('profil enregistré (premiers pas masqués)', !(await page.getByText('Bienvenue sur AutoPostule').isVisible()));
+  check('profil enregistré (premiers pas masqués)', !(await page.getByText('Bienvenue sur Kareer').isVisible()));
 
   // Recherche
   await page.getByLabel('Métier ou mot-clé').fill('développeur');
@@ -99,7 +109,8 @@ try {
   check('8 résultats multi-sources (6 offres + 2 entreprises)', /8\s*offres autour de Avignon/.test(body), body.match(/\d+\s*offres?[^.]{0,40}/)?.[0]);
   check('recherche inscrite dans l’URL', /q=d%C3%A9veloppeur/.test(page.url()) && /lieu=Avignon/.test(page.url()));
   check('fiche détaillée ouverte', (await page.locator('aside h2').count()) === 1);
-  check('score de compatibilité affiché', (await page.locator('article svg text').count()) > 0);
+  check('sans compte : ni pourcentage ni jauge d’adéquation', (await page.locator('article svg text').count()) === 0 && !/% de compatibilit|Adéquation (forte|moyenne|faible)/.test(await page.textContent('main')));
+  check('sans compte : invitation à créer un compte pour voir l’adéquation', await page.getByText('Connectez-vous pour savoir si cette offre correspond').isVisible());
 
   // Candidatures spontanées
   await page.getByLabel('Type').selectOption('spontanees');
@@ -142,6 +153,29 @@ try {
   body = await page.textContent('body');
   check('suivi : 2 candidatures', /Suivies\s*2/.test(body), body.match(/Suivies\s*\d+/)?.[0] || page.url());
 
+  // Photo de CV (facultative) dans le profil
+  await page.locator('header nav button', { hasText: 'Profil' }).click();
+  // Glisser-déposer : un fichier refusé, puis la photo
+  const dropFile = async (name, type, b64) => {
+    const dt = await page.evaluateHandle(({ name, type, b64 }) => {
+      const d = new DataTransfer();
+      d.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], name, { type }));
+      return d;
+    }, { name, type, b64 });
+    const zone = page.getByTestId('photo-dropzone');
+    await zone.dispatchEvent('dragover', { dataTransfer: dt });
+    await zone.dispatchEvent('drop', { dataTransfer: dt });
+    await page.waitForTimeout(500);
+  };
+  await dropFile('cv.pdf', 'application/pdf', Buffer.from('%PDF-1.4').toString('base64'));
+  check('glisser-déposer : format refusé expliqué', await page.getByText(/Format non pris en charge/).isVisible());
+  await dropFile('photo.jpg', 'image/jpeg', fs.readFileSync(path.join(root, 'tests', 'fixtures', 'photo.jpg')).toString('base64'));
+  check('glisser-déposer : photo ajoutée au profil', await page.getByAltText('Votre photo de CV').isVisible() && !(await page.getByText(/Format non pris en charge/).isVisible()));
+  await page.getByRole('button', { name: /^Enregistrer$/ }).first().click();
+  await page.waitForTimeout(500);
+  await page.locator('header nav button', { hasText: 'Candidatures' }).click();
+  await page.waitForTimeout(400);
+
   // Studio : nouveau modèle → version archivée
   await page.getByRole('button', { name: /Voir le CV et la lettre/ }).first().click();
   await page.waitForTimeout(1000);
@@ -156,6 +190,15 @@ try {
   await page.getByRole('button', { name: 'Plus concis' }).click();
   await page.waitForTimeout(1500);
   check('retouche ciblée d’une puce', (await page.locator('textarea[aria-label^="Point 1"]').first().inputValue()).startsWith('Conçu des interfaces'));
+  // Freemium : 2e retouche au-delà du quota gratuit → fenêtre « Passer à Premium »
+  await page.getByRole('button', { name: 'Retoucher le point 1' }).first().click();
+  await page.getByRole('button', { name: 'Plus concis' }).click();
+  await page.waitForTimeout(1200);
+  const upgrade = page.getByRole('dialog', { name: 'Limite du mois atteinte' });
+  check('quota gratuit atteint : fenêtre « Passer à Premium »', await upgrade.isVisible().catch(() => false));
+  await upgrade.getByRole('button', { name: 'Plus tard' }).click();
+  await page.waitForTimeout(300);
+  check('fenêtre Premium refermée', !(await upgrade.isVisible()));
   await page.getByRole('tab', { name: 'Code LaTeX' }).click();
   await page.waitForTimeout(300);
   const tex = await page.getByLabel('Code source LaTeX du CV').inputValue();
@@ -163,17 +206,33 @@ try {
   await page.getByRole('button', { name: /Compact/ }).first().click();
   await page.waitForTimeout(1200);
   check('changement de modèle sans perdre le contenu', (await page.getByLabel('Code source LaTeX du CV').inputValue()).includes('10pt') && (await page.getByLabel('Code source LaTeX du CV').inputValue()).includes('Titre modifié e2e'));
-  if (/pdflatex|tectonic/.test(serverLog) || await page.getByRole('tab', { name: 'Aperçu' }).count()) {
-    await page.getByRole('tab', { name: 'Aperçu' }).click();
-    await page.waitForSelector('iframe[title="Aperçu du CV (PDF)"]', { timeout: 30000 }).catch(() => null);
-    check('aperçu PDF intégré', (await page.locator('iframe[title="Aperçu du CV (PDF)"]').count()) === 1);
+  await page.getByRole('button', { name: 'Photo', exact: true }).click();
+  await page.waitForTimeout(1200);
+  const withPhotoTex = await page.getByLabel('Code source LaTeX du CV').inputValue();
+  check('modèle Photo : photo du profil, formations d’abord', withPhotoTex.includes('photo.jpg') && withPhotoTex.includes('\\resumeSubheading') && withPhotoTex.includes('Titre modifié e2e'));
+  await page.getByRole('tab', { name: 'Lettre de motivation' }).click();
+  const [letterTex] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Lettre .tex' }).click()]);
+  const letterCode = fs.readFileSync(await letterTex.path(), 'utf8');
+  check('lettre mise en page (expéditeur, objet, signature)', /Objet : Candidature/.test(letterCode) && /Karim Dupont/.test(letterCode) && /l'équipe Recrutement/.test(letterCode));
+  if (await page.getByRole('button', { name: 'Lettre en PDF' }).count()) {
+    const [letterPdf] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.getByRole('button', { name: 'Lettre en PDF' }).click()]);
+    check('lettre en PDF', fs.readFileSync(await letterPdf.path()).subarray(0, 4).toString() === '%PDF');
   }
+  await page.getByRole('tab', { name: 'Code LaTeX' }).click();
+  // Le modèle Photo passe en LaTeX si le serveur compile : retour au moteur Web pour l'aperçu Web
+  await page.getByRole('button', { name: 'Web', exact: true }).click();
+  await page.getByRole('tab', { name: 'Aperçu' }).click();
+  await page.waitForSelector('iframe[title="Aperçu du CV"]', { timeout: 30000 }).catch(() => null);
+  const webFrame = page.frameLocator('iframe[title="Aperçu du CV"]');
+  const webText = await webFrame.locator('body').textContent({ timeout: 10000 }).catch(() => '');
+  check('aperçu Web intégré (contenu adapté)', /Titre modifié e2e/.test(webText || ''), (webText || '').slice(0, 80));
+  await page.screenshot({ path: path.join(outDir, 'studio-apercu-web.png') }).catch(() => null);
   const [dl] = await Promise.all([
     page.waitForEvent('download', { timeout: 30000 }),
     page.getByRole('button', { name: /PDF/ }).first().click()
   ]).catch(() => [null]);
   const pdfOk = dl ? fs.readFileSync(await dl.path()).subarray(0, 4).toString() === '%PDF' : false;
-  check('PDF compilé (si LaTeX installé sur la machine)', pdfOk || !/pdflatex|tectonic/.test(serverLog), dl ? '' : 'aucun téléchargement');
+  check('PDF Web téléchargé (Chromium)', pdfOk, dl ? '' : 'aucun téléchargement');
   await page.getByRole('button', { name: 'Valider et postuler' }).click();
   await page.waitForTimeout(800);
   body = await page.textContent('body');
@@ -216,7 +275,7 @@ try {
   const bg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   check('mode sombre', await page.evaluate(() => document.documentElement.classList.contains('dark')) && bg !== 'rgb(246, 247, 249)', bg);
 
-  // Assistant : série de dossiers, file d'envoi, PDF sans LaTeX (rendu Chromium)
+  // Assistant : série de dossiers, file d'envoi, CV en PDF
   await page.locator('header nav button', { hasText: 'Assistant' }).click();
   await page.waitForTimeout(400);
   await page.getByRole('button', { name: /Préparer en série/ }).click();
@@ -237,8 +296,65 @@ try {
   await page.waitForTimeout(400);
   check('file d’envoi : dossier envoyé retiré de la file', (await queue.locator('li').count()) === queued - 1);
 
+  // « Adapter mon CV à une offre trouvée ailleurs » (offre collée)
+  await page.goto(`${BASE}/?onglet=cv`);
+  await page.waitForTimeout(1000);
+  await page.getByLabel('Texte de l’offre').fill(`Développeur React H/F\nNous recherchons un développeur React et Node.js pour concevoir des interfaces accessibles et des API REST. Vous travaillerez avec TypeScript et Docker au sein d'une équipe produit. Merci d'envoyer votre CV au format Word.`);
+  await page.getByRole('button', { name: /Voir quoi changer dans mon CV/ }).click();
+  await page.getByText(/Modifications proposées/).waitFor({ timeout: 20000 }).catch(() => {});
+  const matchText = await page.textContent('main');
+  check('offre collée : mots-clés classés et modifications proposées', /Déjà dans votre CV/.test(matchText) && /Modifications proposées \(\d+\)/.test(matchText) && !/Pack Office/.test(matchText), matchText.slice(0, 200));
+  await page.screenshot({ path: path.join(outDir, 'offre-collee.png'), fullPage: true }).catch(() => null);
+  await page.getByRole('button', { name: /Appliquer dans le Studio/ }).click();
+  await page.waitForTimeout(800);
+  check('offre collée : ouverture du Studio avec le contenu adapté', await page.getByRole('tab', { name: 'Contenu' }).isVisible() && (await page.getByLabel('Titre du CV').inputValue()).length > 0);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+
+  await page.goto(`${BASE}/?onglet=tarifs`);
+  await page.waitForTimeout(1200);
+  const pricing = await page.textContent('main');
+  check('page Tarifs : forfaits et consommation du mois', /Premium/.test(pricing) && /Retouches et évaluations IA\s*1\s*\/\s*1/.test(pricing), pricing.slice(0, 160));
   check('aucune erreur JavaScript', errors.length === 0, errors.slice(0, 3).join(' | '));
   await ctx.close();
+
+  // --- Outils publics (sans compte) ------------------------------------------------------------------
+  console.log('\nOutils publics');
+  for (const [label, viewport] of [['bureau', { width: 1280, height: 900 }], ['mobile', { width: 390, height: 844 }]]) {
+    const tctx = await browser.newContext({ viewport, locale: 'fr-FR', ...(label === 'mobile' ? { isMobile: true, hasTouch: true } : {}) });
+    const tp = await tctx.newPage();
+    const jobCalls = [];
+    tp.on('request', (r) => { if (r.url().includes('/api/jobs/search')) jobCalls.push(r.url()); });
+    const toolErrors = [];
+    tp.on('pageerror', (e) => toolErrors.push(e.message));
+    await tp.goto(`${BASE}/verificateur-cv-ats`, { waitUntil: 'domcontentloaded' });
+    await tp.waitForTimeout(800);
+    check(`[${label}] vérificateur ATS : page publique, titre dédié`, /Vérificateur de CV ATS/.test(await tp.title()) && await tp.getByRole('heading', { name: /logiciels de recrutement/ }).isVisible());
+    await tp.getByLabel('Choisir le fichier de votre CV').setInputFiles(path.join(root, 'tests', 'fixtures', 'cv-exemple.docx'));
+    await tp.getByRole('button', { name: 'Analyser mon CV' }).click();
+    await tp.getByRole('heading', { name: /Compatibilité ATS/ }).waitFor({ timeout: 15000 });
+    const atsText = await tp.textContent('main');
+    check(`[${label}] vérificateur ATS : score et contrôles détaillés`, /Coordonnées/.test(atsText) && /Sections standard/.test(atsText) && /\/ 100|sur 100/.test(await tp.locator('svg[role=img]').first().getAttribute('aria-label') || ''), atsText.slice(0, 120));
+    await tp.getByRole('button', { name: /Comparer ce CV à une offre/ }).click();
+    await tp.waitForTimeout(300);
+    check(`[${label}] adresse partageable du comparateur`, new URL(tp.url()).pathname === '/match-cv-offre');
+    // Offre : déposée en PDF sur bureau, collée en texte sur mobile
+    if (label === 'bureau') {
+      await tp.getByLabel('Choisir le fichier de l’offre').setInputFiles(path.join(root, 'tests', 'fixtures', 'offre-exemple.pdf'));
+      check('[bureau] offre déposée en document (PDF)', await tp.getByText('offre-exemple.pdf').waitFor({ timeout: 5000 }).then(() => true, () => false));
+    } else {
+      await tp.getByRole('group', { name: /fournir l’offre/ }).getByRole('button', { name: 'Coller le texte' }).click();
+      await tp.getByLabel('Texte de l’offre').fill('Développeur React H/F - CDI\nMissions : développement d’interfaces React, API REST en Node.js.\nProfil : TypeScript, Docker, Kubernetes souhaité.');
+    }
+    await tp.getByRole('button', { name: 'Comparer', exact: true }).click();
+    await tp.getByRole('heading', { name: /présents dans votre CV/ }).waitFor({ timeout: 15000 });
+    const matchText = await tp.textContent('main');
+    check(`[${label}] comparaison CV / offre : présents et absents`, /React/.test(matchText) && /Absents de votre CV/.test(matchText) && /Kubernetes/.test(matchText), matchText.slice(0, 160));
+    check(`[${label}] outils : aucune recherche d’offres lancée (quotas préservés)`, jobCalls.length === 0, jobCalls.join(' '));
+    check(`[${label}] outils : pas de défilement horizontal, aucune erreur`, !(await tp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) && toolErrors.length === 0, toolErrors.join(' | '));
+    await tp.screenshot({ path: path.join(outDir, `outils-${label}.png`), fullPage: true }).catch(() => null);
+    await tctx.close();
+  }
 
   // --- Mobile -----------------------------------------------------------------------------------------
   console.log('\nMobile');
@@ -252,6 +368,7 @@ try {
   check('pas de défilement horizontal', overflow <= 1, `${overflow}px`);
   await m.close();
 } catch (e) {
+  for (const p of browser.contexts().flatMap((c) => c.pages()).slice(0, 1)) await p.screenshot({ path: path.join(outDir, 'e2e-echec.png') }).catch(() => {});
   check('exécution sans exception', false, e?.message);
 } finally {
   await browser.close();
@@ -261,4 +378,3 @@ try {
 const failed = results.filter((r) => !r.ok).length;
 console.log(`\n${results.length - failed}/${results.length} vérifications réussies.`);
 process.exit(failed ? 1 : 0);
-

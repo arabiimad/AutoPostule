@@ -1,4 +1,4 @@
-export type CvTemplate = 'article' | 'moderncv' | 'compact';
+export type CvTemplate = 'article' | 'photo' | 'moderncv' | 'compact';
 
 export type ContractType = 'stage' | 'alternance' | 'cdi' | 'cdd' | 'freelance';
 
@@ -52,6 +52,8 @@ export interface UserProfile {
   autoApplyEnabled: boolean;
   minMatchScore: number;
   preferredTemplate: CvTemplate;
+  /** Photo facultative (JPEG carré en data URL), affichée sur le modèle « Photo ». Jamais envoyée à l'IA. */
+  photo?: string;
   /** Recherches enregistrées (alertes). */
   savedSearches?: SavedSearch[];
   updatedAt?: string;

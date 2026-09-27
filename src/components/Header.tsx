@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, FileText, KanbanSquare, MessagesSquare, UserRound, LogOut, Bot, ChevronDown, Upload, Bell, Sun, Moon, Monitor } from 'lucide-react';
+import { Search, FileText, KanbanSquare, MessagesSquare, UserRound, LogOut, Bot, ChevronDown, Upload, Bell, Sun, Moon, Monitor, Sparkles, ScanSearch } from 'lucide-react';
 import { getThemePref, setThemePref, type ThemePref } from '../utils/theme';
-import { User } from 'firebase/auth';
+import type { AppUser as User } from '../data/cloud';
 import { Button, cx } from './ui';
-
-export type TabId = 'radar' | 'latex' | 'agent' | 'kanban' | 'interview' | 'profile';
+import { KareerMark } from './KareerLogo';
+export type { TabId } from '../utils/url';
+import type { TabId } from '../utils/url';
 
 interface HeaderProps {
   currentTab: TabId;
@@ -22,6 +23,10 @@ interface HeaderProps {
   applicationsCount?: number;
   /** Nouvelles offres trouvées par les alertes. */
   alertsNewCount?: number;
+  /** Forfait actuel (null : inconnu). */
+  plan?: 'free' | 'premium' | null;
+  /** Onglets affichés (visiteur : recherche et Studio). Par défaut : tous. */
+  visibleTabs?: TabId[];
 }
 
 const THEME_CYCLE: ThemePref[] = ['system', 'light', 'dark'];
@@ -66,8 +71,11 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenCvUpload,
   followUpDueCount = 0,
   applicationsCount = 0,
-  alertsNewCount = 0
+  alertsNewCount = 0,
+  plan = null,
+  visibleTabs
 }) => {
+  const tabs = visibleTabs ? TABS.filter((t) => visibleTabs.includes(t.id)) : TABS;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -101,17 +109,14 @@ export const Header: React.FC<HeaderProps> = ({
     <>
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 xl:gap-6 px-4 sm:px-6 lg:px-8">
-          <button onClick={() => setCurrentTab('radar')} className="flex items-center gap-2.5 shrink-0" aria-label="AutoPostule — accueil">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
-              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M4 17l5-5 4 4 7-8" /><path d="M15 8h5v5" />
-              </svg>
-            </span>
-            <span className="text-[17px] font-extrabold tracking-tight text-slate-900">AutoPostule</span>
+          <button onClick={() => setCurrentTab('radar')} className="flex items-center gap-2.5 shrink-0" aria-label="Kareer — accueil">
+            <KareerMark size={36} className="shrink-0 drop-shadow-sm" />
+            {/* Petits écrans : pictogramme seul, pour laisser la place aux boutons (le nom reste dans l'aria-label) */}
+            <span className="hidden min-[480px]:inline text-[19px] font-extrabold tracking-tight text-slate-900">Kareer</span>
           </button>
 
           <nav className="hidden lg:flex items-center h-full" aria-label="Navigation principale">
-            {TABS.map(({ id, label, icon: Icon }) => {
+            {tabs.map(({ id, label, short }) => {
               const active = currentTab === id;
               return (
                 <button
@@ -123,16 +128,36 @@ export const Header: React.FC<HeaderProps> = ({
                     active ? 'text-slate-900' : 'text-slate-500 hover:text-slate-900'
                   )}
                 >
-                  <Icon className="h-4 w-4 hidden 2xl:block" />
-                  {label}
+                  {/* Libellé court sur les écrans moyens : l'en-tête tient sur une ligne */}
+                  <span className="hidden xl:inline">{label}</span><span className="xl:hidden">{short}</span>
                   {tabBadge(id)}
                   {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-brand-600" />}
                 </button>
               );
             })}
+            {/* Outils publics (vérificateur ATS, comparaison CV / offre) */}
+            <button
+              onClick={() => setCurrentTab('ats')}
+              aria-current={currentTab === 'ats' || currentTab === 'match' ? 'page' : undefined}
+              title="Outils gratuits : vérificateur de CV ATS, comparaison CV / offre"
+              className={cx(
+                'relative flex h-full items-center gap-2 px-2.5 xl:px-3 text-sm font-medium whitespace-nowrap transition-colors',
+                currentTab === 'ats' || currentTab === 'match' ? 'text-slate-900' : 'text-slate-500 hover:text-slate-900'
+              )}
+            >
+              Outils
+              {(currentTab === 'ats' || currentTab === 'match') && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-brand-600" />}
+            </button>
           </nav>
 
           <div className="ml-auto flex items-center gap-2" ref={menuRef}>
+            <button
+              onClick={() => setCurrentTab('ats')}
+              aria-current={currentTab === 'ats' || currentTab === 'match' ? 'page' : undefined}
+              className={cx('lg:hidden flex items-center gap-1 rounded-full px-2.5 h-8 text-xs font-semibold', currentTab === 'ats' || currentTab === 'match' ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')}
+            >
+              <ScanSearch className="h-3.5 w-3.5" aria-hidden="true" /> Outils
+            </button>
             <ThemeButton />
             {followUpDueCount > 0 && (
               <button
@@ -140,6 +165,24 @@ export const Header: React.FC<HeaderProps> = ({
                 className="hidden sm:flex items-center gap-1.5 rounded-full bg-amber-50 px-3 h-8 text-xs font-semibold text-amber-800 hover:bg-amber-100"
               >
                 <Bell className="h-3.5 w-3.5" /> {followUpDueCount} à relancer
+              </button>
+            )}
+            {plan === 'premium' ? (
+              <button
+                onClick={() => setCurrentTab('pricing')}
+                className="hidden sm:flex items-center gap-1 rounded-full bg-brand-50 px-3 h-8 text-xs font-semibold text-brand-700 hover:bg-brand-100"
+                title="Votre forfait Premium"
+              >
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> Premium
+              </button>
+            ) : (
+              <button
+                onClick={() => setCurrentTab('pricing')}
+                className={cx('flex items-center gap-1 rounded-full px-2.5 sm:px-3 h-8 text-xs font-semibold', currentTab === 'pricing' ? 'bg-brand-600 text-white' : 'bg-brand-50 text-brand-700 hover:bg-brand-100')}
+                aria-current={currentTab === 'pricing' ? 'page' : undefined}
+                aria-label="Passer à Premium"
+              >
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" /> <span className="hidden sm:inline lg:hidden xl:inline">Premium</span>
               </button>
             )}
             {onOpenCvUpload && (
@@ -177,6 +220,9 @@ export const Header: React.FC<HeaderProps> = ({
                     <button role="menuitem" onClick={() => { setCurrentTab('profile'); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">
                       <UserRound className="h-4 w-4 text-slate-400" /> Mon profil
                     </button>
+                    <button role="menuitem" onClick={() => { setCurrentTab('pricing'); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">
+                      <Sparkles className="h-4 w-4 text-slate-400" /> Abonnement et consommation
+                    </button>
                     <div className="my-1 border-t border-slate-100" />
                     <button role="menuitem" onClick={() => { onLogout(); setMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50">
                       <LogOut className="h-4 w-4" /> Se déconnecter
@@ -187,7 +233,8 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <div className="flex items-center gap-1.5">
                 <Button variant="ghost" size="sm" onClick={() => onOpenAuthModal('login')}>Connexion</Button>
-                <span className="hidden sm:block">
+                {/* Écrans moyens avec menu complet : l'inscription reste accessible depuis « Connexion » */}
+                <span className="hidden md:block lg:hidden">
                   <Button variant="primary" size="sm" onClick={() => onOpenAuthModal('register')}>Créer un compte</Button>
                 </span>
               </div>
@@ -198,8 +245,8 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Barre d'onglets mobile (bas d'écran) */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur pb-[env(safe-area-inset-bottom)]" aria-label="Navigation">
-        <div className="grid grid-cols-6">
-          {TABS.map(({ id, short, icon: Icon }) => {
+        <div className="grid" style={{ gridTemplateColumns: `repeat(${tabs.length + (visibleTabs ? 1 : 0)}, minmax(0, 1fr))` }}>
+          {tabs.map(({ id, short, icon: Icon }) => {
             const active = currentTab === id;
             return (
               <button key={id} onClick={() => setCurrentTab(id)} aria-current={active ? 'page' : undefined}
@@ -211,6 +258,12 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             );
           })}
+          {visibleTabs && (
+            <button onClick={() => onOpenAuthModal('register')} className="flex flex-col items-center gap-0.5 py-2 text-[10.5px] font-medium text-brand-700">
+              <UserRound className="h-5 w-5" />
+              Créer un compte
+            </button>
+          )}
         </div>
       </nav>
     </>

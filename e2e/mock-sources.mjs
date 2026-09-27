@@ -54,6 +54,11 @@ function gemini(req, res, u) {
       return res.end(JSON.stringify({ error: { code: 400, status: 'FAILED_PRECONDITION', message: 'This model requires a billing-enabled project.' } }));
     }
     const prompt = JSON.stringify(JSON.parse(body || '{}').contents || '');
+    // Quota gratuit épuisé (même réponse que Google) : déclenché par une offre de test
+    if (prompt.includes('QUOTA-E2E')) {
+      res.statusCode = 429;
+      return res.end(JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20' } }));
+    }
     let text = '';
     if (prompt.includes('Analyse cette offre')) {
       text = JSON.stringify({ domain: 'Développement web', tone: 'technique', mustHave: ['React', 'TypeScript'], missions: ['Développer des interfaces'], softSkills: ['Rigueur'], keywords: ['React'] });

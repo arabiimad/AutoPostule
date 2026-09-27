@@ -49,6 +49,12 @@ test('rien n\'est inventé sur un texte illisible', () => {
   assert.equal(isParsedCvEmpty(p), true);
 });
 
+test('compétences du profil : telles qu’écrites, sans regroupement ni ajout (pas de « Kubernetes » pour « Docker »)', () => {
+  const cv = parseCvSemantically(`Karim Dupont\nDéveloppeur\nkarim@mail.fr\nCOMPÉTENCES\nReact, PostgreSQL, Git, Docker, Node.js`);
+  assert.deepEqual(cv.skills.filter((s) => /docker|kubernetes|postgres|données|git|ci\/cd|node/i.test(s)), ['PostgreSQL', 'Git', 'Docker', 'Node.js']);
+  assert.ok(!cv.skills.some((s) => s === 'Node'));
+});
+
 test('compétences du profil : seuls les outils écrits dans le CV, jamais un nom de groupe', () => {
   const p = parseCvSemantically('Karim Dupont\nDéveloppeur\nkarim@mail.fr\nEXPÉRIENCES\nDéveloppeur - Studio X | 2021 - Présent\nMise en place de Docker et MySQL, retouches Photoshop\nCOMPÉTENCES\nReact, aws, ci/cd, UI/UX / Figma');
   for (const s of ['Docker', 'MySQL', 'Photoshop', 'AWS', 'CI/CD', 'UI/UX', 'Figma', 'React']) assert.ok(p.skills.includes(s), `${s} manquant : ${p.skills}`);

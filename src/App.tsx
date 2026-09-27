@@ -1,19 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import {
-  onAuthStateChanged,
-  signOut,
-  User
-} from 'firebase/auth';
-import {
-  doc,
-  getDoc,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  collection,
-  onSnapshot
-} from 'firebase/firestore';
-import { auth, db } from './firebase';
+import * as cloud from './data/cloud';
+import { accountsRequired, isCloudUser, type AppUser as User } from './data/cloud';
+import { AccountGate } from './components/AccountGate';
 import { Header } from './components/Header';
 import { JobSearchView } from './components/jobs/JobSearchView';
 import { LatexStudioModal } from './components/LatexStudioModal';
@@ -22,16 +10,29 @@ import { KanbanCrmView } from './components/KanbanCrmView';
 import { InterviewCockpitModal } from './components/InterviewCockpitModal';
 import { MasterProfileView } from './components/MasterProfileView';
 import { AuthModal } from './components/AuthModal';
+import { PricingView } from './components/PricingView';
+import { OfferMatchView } from './components/OfferMatchView';
+import { UpgradeModal } from './components/UpgradeModal';
+import { track, identifyUser } from './utils/monitoring';
+import { fetchUsage, QUOTA_EVENT, type AccountUsage, type QuotaEventDetail } from './data/account';
 import { CvUploadModal } from './components/CvUploadModal';
 import { EMPTY_PROFILE } from './mockData';
-import { UserProfile, JobOffer, Application, AgentLog, ApplicationStatus, InterviewPrepKit, CvTemplate, SavedSearch, DossierVersion } from './types';
+import { UserProfile, JobOffer, Application, AgentLog, ApplicationStatus, InterviewPrepKit, CvTemplate, SavedSearch, DossierVersion, TailoredCv, OfferAnalysis } from './types';
 import { apiFetch, readJson as readApiJson } from './utils/api';
-import { Badge, Button, CompanyAvatar, EmptyState, MatchRing, PageHeader } from './components/ui';
+import { Badge, Button, CompanyAvatar, EmptyState, FitBadge, PageHeader } from './components/ui';
 import { CONTRACT_LABELS, sourceShortName } from './utils/format';
-import { readTab, readSearch, writeTab, writeUrl, type TabId, type SearchUrlState } from './utils/url';
+import { isGatedForVisitor, readTab, readSearch, writeTab, writeUrl, type TabId, type SearchUrlState } from './utils/url';
 import { FollowUpModal } from './components/FollowUpModal';
-import { calculateCandidateMatch } from './utils/skillMatcher';
+import { assessFit, calculateCandidateMatch } from './utils/skillMatcher';
 import { getApplyUrl } from './utils/jobLinks';
+import { normalizeCvTemplate } from './utils/templates';
+import { ToolsView } from './components/tools/ToolsView';
+
+const isPublicTool = (t: TabId) => t === 'ats' || t === 'match';
+const PUBLIC_TOOL_META: Record<'ats' | 'match', { title: string; description: string }> = {
+  ats: { title: 'Vérificateur de CV ATS gratuit — Kareer', description: 'Testez gratuitement et sans inscription si votre CV est lisible par les logiciels de recrutement (ATS) : texte, sections, coordonnées, mise en page.' },
+  match: { title: 'Comparer son CV à une offre d’emploi, gratuit — Kareer', description: 'Collez une offre et déposez votre CV : découvrez gratuitement les mots-clés de l’offre présents et absents de votre CV.' }
+};
 import {
   FileCode2,
   Award,
@@ -61,9 +62,6 @@ function writeJson(key: string, value: unknown) {
     // stockage indisponible (navigation privée…)
   }
 }
-
-/** Un utilisateur Firebase réel (≠ session locale « local-usr-… »). */
-const isCloudUser = (u: User | null): u is User => !!u && !u.uid.startsWith('local-');
 
 /** Complète un profil partiel avec des valeurs VIDES (jamais avec les données de quelqu'un d'autre). */
 function withProfileDefaults(p: Partial<UserProfile>): UserProfile {
@@ -168,6 +166,7 @@ export default function App() {
   const [notificationsOn, setNotificationsOn] = useState(notificationsAllowed());
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register'>('register');
+  const [authReason, setAuthReason] = useState<string | undefined>(undefined);
   const [cvUploadModalOpen, setCvUploadModalOpen] = useState(false);
   const [isMandatoryOnboarding, setIsMandatoryOnboarding] = useState(false);
 
@@ -198,10 +197,6 @@ export default function App() {
 
   const [agentLogs, setAgentLogs] = useState<AgentLog[]>([]);
 
-  // Nom / titre saisis à l'inscription, appliqués quel que soit l'ordre d'arrivée
-  // (onAuthStateChanged peut se déclencher avant ou après le retour d'AuthModal)
-  const pendingSignupRef = useRef<{ uid: string; fullName?: string; title?: string } | null>(null);
-
   // Références à jour pour les callbacks asynchrones
   const currentUserRef = useRef<User | null>(null);
   currentUserRef.current = currentUser;
@@ -214,6 +209,52 @@ export default function App() {
   jobsRef.current = jobs;
   const applicationsRef = useRef<Application[]>(applications);
   applicationsRef.current = applications;
+
+  // Offre collée (« Adapter mon CV ») : contenu adapté transmis au Studio
+  const [pastedDossier, setPastedDossier] = useState<{ jobId: string; tailored: TailoredCv; analysis: OfferAnalysis } | null>(null);
+
+  // Forfait et consommation (freemium)
+  const [accountUsage, setAccountUsage] = useState<AccountUsage | null>(null);
+  const [quotaDetail, setQuotaDetail] = useState<QuotaEventDetail | null>(null);
+  const [paymentStatus] = useState<string | null>(() => {
+    const p = new URLSearchParams(window.location.search);
+    const v = p.get('paiement');
+    if (v) {
+      p.delete('paiement');
+      const qs = p.toString();
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+    }
+    return v;
+  });
+  const refreshUsage = () => fetchUsage().then(setAccountUsage).catch(() => {});
+  useEffect(() => {
+    refreshUsage();
+  }, [currentUser?.uid]);
+  useEffect(() => {
+    if (currentTab === 'pricing') {
+      refreshUsage();
+      track('pricing_viewed');
+    }
+  }, [currentTab]);
+  useEffect(() => {
+    identifyUser(isCloudUser(currentUser) ? currentUser.uid : null, accountUsage?.plan);
+  }, [currentUser?.uid, accountUsage?.plan]);
+  useEffect(() => {
+    // Après un paiement, le webhook Stripe active Premium en quelques secondes
+    if (paymentStatus !== 'ok') return;
+    const t = [3000, 8000, 15000].map((ms) => setTimeout(refreshUsage, ms));
+    return () => t.forEach(clearTimeout);
+  }, [paymentStatus]);
+  useEffect(() => {
+    const onQuota = (e: Event) => {
+      const detail = (e as CustomEvent<QuotaEventDetail>).detail;
+      setQuotaDetail(detail);
+      track('quota_exceeded', { kind: detail?.kind, plan: detail?.plan });
+      refreshUsage();
+    };
+    window.addEventListener(QUOTA_EVENT, onQuota);
+    return () => window.removeEventListener(QUOTA_EVENT, onQuota);
+  }, []);
 
   /** Change d'onglet et l'inscrit dans l'historique du navigateur (bouton Précédent). */
   const setCurrentTab = (tab: TabId) => {
@@ -228,12 +269,43 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToastMessage(null), error ? 7000 : 5000);
   };
 
+  const signedIn = isCloudUser(currentUser);
+  /** Visiteur sur un service qui exige un compte (production). */
+  const gated = accountsRequired && !signedIn;
+  /** Onglets ouverts aux visiteurs : la recherche d'offres et les tarifs. */
+  // Offres, tarifs et outils publics (vérificateur ATS, comparaison CV / offre) restent ouverts aux visiteurs
+  const showGate = isGatedForVisitor(currentTab, gated);
+  const openAuth = (mode: 'login' | 'register', reason?: string) => {
+    setAuthReason(reason);
+    setAuthModalMode(mode);
+    setAuthModalOpen(true);
+  };
+  /** Renvoie true (et ouvre l'inscription) si l'action exige un compte. */
+  const needAccount = (reason: string) => {
+    if (!accountsRequired || isCloudUser(currentUserRef.current)) return false;
+    track('account_gate', { reason });
+    openAuth('register', reason);
+    return true;
+  };
+  const openCvUpload = () => {
+    if (needAccount('Créez votre compte pour importer votre CV : il sert de base à toutes vos candidatures.')) return;
+    setIsMandatoryOnboarding(false);
+    setCvUploadModalOpen(true);
+  };
+
   const addLog = (log: Omit<AgentLog, 'id' | 'timestamp'>) => {
     setAgentLogs(prev => [{ id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, timestamp: nowTime(), ...log }, ...prev].slice(0, 100));
   };
 
-  /** Charge une session locale (sans compte Firebase) à partir du stockage du navigateur. */
+  /** Charge une session locale (sans compte en ligne) à partir du stockage du navigateur. */
   const loadLocalSession = () => {
+    if (accountsRequired) {
+      // Production : aucune donnée personnelle hors compte
+      setCurrentUser(null);
+      setUserProfile(EMPTY_PROFILE);
+      setApplications([]);
+      return;
+    }
     const stored = readJson<{ uid: string; displayName?: string; email?: string }>(LOCAL_USER_KEY);
     if (stored?.uid) {
       const localUser = { uid: stored.uid, displayName: stored.displayName || '', email: stored.email || '' } as unknown as User;
@@ -264,15 +336,35 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
+  // Première recherche d'offres : pas sur les outils publics (chaque visite consommerait les quotas des API d'offres)
+  const initialSearchDone = useRef(false);
   useEffect(() => {
+    if (initialSearchDone.current || isPublicTool(currentTab)) return;
+    initialSearchDone.current = true;
     const s = initialSearch.current;
     handleFetchLiveJobs(s.query, s.contractType, s.location, s.radius);
-    // Affichage immédiat des données locales (session locale / invité) sans attendre la réponse de Firebase Auth
-    if (!auth.currentUser) loadLocalSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTab]);
+
+  // Titre et description de page (partage, moteurs de recherche) pour les outils publics
+  useEffect(() => {
+    const meta = PUBLIC_TOOL_META[currentTab as 'ats' | 'match'];
+    const title = meta?.title || 'Kareer — Offres, CV sur mesure et suivi de candidatures';
+    document.title = title;
+    const desc = document.querySelector('meta[name="description"]');
+    if (desc) {
+      if (!desc.getAttribute('data-default')) desc.setAttribute('data-default', desc.getAttribute('content') || '');
+      desc.setAttribute('content', meta?.description || desc.getAttribute('data-default') || '');
+    }
+  }, [currentTab]);
+
+  useEffect(() => {
+    // Affichage immédiat des données locales (session locale / invité) sans attendre le service de comptes
+    loadLocalSession();
 
     let unsubApps: (() => void) | null = null;
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = cloud.onAuthChange(async (user) => {
       if (unsubApps) {
         unsubApps();
         unsubApps = null;
@@ -285,51 +377,35 @@ export default function App() {
 
       setCurrentUser(user);
 
-      // App est le SEUL à créer le profil Firestore (avant : App et AuthModal écrivaient en même temps)
+      // App est le SEUL à créer le profil en ligne
       try {
-        const userDocRef = doc(db, 'users', user.uid);
-        const docSnap = await getDoc(userDocRef);
+        const stored = await cloud.loadProfile(user.uid);
         let profile: UserProfile;
-        const pending = pendingSignupRef.current?.uid === user.uid ? pendingSignupRef.current : null;
-        if (docSnap.exists()) {
-          profile = withProfileDefaults(docSnap.data() as UserProfile);
+        if (stored) {
+          profile = withProfileDefaults(stored);
         } else {
           profile = withProfileDefaults({
             userId: user.uid,
-            fullName: pending?.fullName || user.displayName || '',
-            title: pending?.title || '',
+            fullName: user.displayName || '',
+            title: user.title || '',
             email: user.email || ''
           });
-          await setDoc(userDocRef, profile);
-        }
-        // Si l'inscription a fourni un nom pendant le chargement, il n'est pas écrasé par une valeur vide
-        if (pending && (!profile.fullName || !profile.title)) {
-          profile = { ...profile, fullName: profile.fullName || pending.fullName || '', title: profile.title || pending.title || '' };
-          await setDoc(userDocRef, profile, { merge: true });
+          await cloud.saveProfile(user.uid, profile);
         }
         setUserProfile(profile);
-        if (!profile.fullName || profile.skills.length === 0 || profile.experiences.length === 0) {
-          setIsMandatoryOnboarding(!docSnap.exists());
+        // Profil vide : import du CV proposé, sauf sur un outil public (la page doit rester utilisable)
+        if ((!profile.fullName || profile.skills.length === 0 || profile.experiences.length === 0) && !isPublicTool(readTab())) {
+          setIsMandatoryOnboarding(!stored);
           setCvUploadModalOpen(true);
         }
       } catch (e) {
-        console.error('Firestore user sync error:', e);
+        console.error('Profile sync error:', e);
         showToast('Profil non chargé', 'Impossible de lire votre profil en ligne. Vérifiez votre connexion.', true);
       }
 
-      try {
-        const appsRef = collection(db, 'users', user.uid, 'applications');
-        unsubApps = onSnapshot(appsRef, (snap) => {
-          const loaded: Application[] = [];
-          snap.forEach(d => loaded.push(d.data() as Application));
-          loaded.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-          setApplications(loaded);
-        }, (err) => {
-          console.error('Firestore applications sync error:', err);
-        });
-      } catch (err) {
-        console.error('Firestore applications sync error:', err);
-      }
+      unsubApps = cloud.subscribeApplications(user.uid, setApplications, (err) => {
+        console.error('Applications sync error:', err);
+      });
     });
 
     return () => {
@@ -343,7 +419,7 @@ export default function App() {
       localStorage.removeItem(LOCAL_USER_KEY);
     } catch {}
     try {
-      if (auth.currentUser) await signOut(auth);
+      if (isCloudUser(currentUserRef.current)) await cloud.signOut();
     } catch (e) {
       console.error('Logout error:', e);
     }
@@ -378,6 +454,7 @@ export default function App() {
         hasMore: !!data.hasMore
       });
       markSavedSearchSeen({ query, contractType, location, radius }, Array.isArray(data.jobs) ? data.jobs : []);
+      if (query) track('job_search', { results: Array.isArray(data.jobs) ? data.jobs.length : 0, contract: contractType, hasLocation: !!location });
     } catch (e: any) {
       if (searchId === lastSearchId.current) {
         showToast('Recherche indisponible', e?.message || 'La recherche a échoué. Réessayez.', true);
@@ -447,6 +524,7 @@ export default function App() {
   };
 
   const handleSaveSearch = () => {
+    if (needAccount('Créez votre compte pour enregistrer cette recherche et être prévenu(e) des nouvelles offres.')) return;
     const params = lastParams.current;
     const saved = profileRef.current.savedSearches || [];
     if (!params.query.trim() && !params.location.trim()) {
@@ -550,8 +628,8 @@ export default function App() {
     setUserProfile(toSave);
     try {
       if (isCloudUser(user)) {
-        await setDoc(doc(db, 'users', user.uid), toSave);
-      } else {
+        await cloud.saveProfile(user.uid, toSave);
+      } else if (!accountsRequired) {
         writeJson(profileKey(storageUid(user)), toSave);
       }
       if (!options.silent) {
@@ -567,7 +645,7 @@ export default function App() {
   };
 
   const saveApplicationsLocally = (user: User | null, apps: Application[]) => {
-    if (!isCloudUser(user)) writeJson(appsKey(storageUid(user)), apps);
+    if (!accountsRequired && !isCloudUser(user)) writeJson(appsKey(storageUid(user)), apps);
   };
 
   const persistApplication = async (app: Application) => {
@@ -579,9 +657,9 @@ export default function App() {
     });
     if (isCloudUser(user)) {
       try {
-        await setDoc(doc(db, 'users', user.uid, 'applications', app.id), app);
+        await cloud.saveApplication(user.uid, app);
       } catch (err) {
-        console.error('Firestore app save error:', err);
+        console.error('App save error:', err);
         showToast('Sauvegarde en ligne échouée', 'Le dossier est visible ici mais n\'a pas été enregistré en ligne.', true);
       }
     }
@@ -589,6 +667,7 @@ export default function App() {
 
   const patchApplication = async (appId: string, patch: Partial<Application>) => {
     const user = currentUserRef.current;
+    const current = applicationsRef.current.find(a => a.id === appId);
     setApplications(prev => {
       const updated = prev.map(a => (a.id === appId ? { ...a, ...patch } : a));
       saveApplicationsLocally(user, updated);
@@ -596,9 +675,9 @@ export default function App() {
     });
     if (isCloudUser(user)) {
       try {
-        await updateDoc(doc(db, 'users', user.uid, 'applications', appId), patch as any);
+        if (current) await cloud.saveApplication(user.uid, { ...current, ...patch });
       } catch (err) {
-        console.error('Firestore app update error:', err);
+        console.error('App update error:', err);
         showToast('Mise à jour en ligne échouée', 'Réessayez dans un instant.', true);
       }
     }
@@ -606,6 +685,7 @@ export default function App() {
 
   const handleUpdateAppStatus = async (appId: string, newStatus: ApplicationStatus) => {
     const app = applications.find(a => a.id === appId);
+    track('application_status', { status: newStatus });
     const patch: Partial<Application> = {
       status: newStatus,
       logEvents: [...(app?.logEvents || []), { timestamp: new Date().toLocaleString('fr-FR'), message: `Statut : ${STATUS_LABELS[newStatus]}` }]
@@ -629,7 +709,7 @@ export default function App() {
   // Préparation d'un dossier (CV + lettre) et ouverture du portail
   // -------------------------------------------------------------------------
   const preferredTemplate = (): CvTemplate =>
-    userProfile.preferredTemplate === 'moderncv' || userProfile.preferredTemplate === 'compact' ? userProfile.preferredTemplate : 'article';
+    normalizeCvTemplate(userProfile.preferredTemplate);
 
   const generateDossier = async (job: JobOffer) => {
     // CV et lettre générés en parallèle (avant : l'un après l'autre)
@@ -640,6 +720,12 @@ export default function App() {
     const dataLatex = await resLatex.json().catch(() => null);
     const dataLetter = await resLetter.json().catch(() => null);
     // Limite de débit du serveur : l'erreur indique quand réessayer (utilisé par la série de l'assistant)
+    // Quota du forfait atteint : inutile de poursuivre une série
+    const overQuota = [[resLatex, dataLatex], [resLetter, dataLetter]].find(([r]) => (r as Response).status === 402);
+    if (overQuota) {
+      const d: any = overQuota[1];
+      throw Object.assign(new Error(d?.message || 'Quota mensuel atteint.'), { quotaExceeded: true });
+    }
     const limited = [resLatex, resLetter].find(r => r.status === 429);
     if (limited) {
       const retryAfter = Math.min(120, Math.max(1, Number(limited.headers.get('Retry-After')) || 60));
@@ -724,6 +810,8 @@ export default function App() {
   /** Doit être appelé directement dans un gestionnaire de clic (ouverture du portail non bloquée). */
   const handleInstantAutoApply = async (job: JobOffer) => {
     if (!job || agentBusyRef.current) return;
+    if (needAccount('Créez votre compte pour préparer votre CV et votre lettre pour cette offre.')) return;
+    track('express_apply', { spontaneous: !!job.isSpontaneous });
 
     // Contrôles synchrones AVANT toute attente
     const existing = findExistingApplication(job);
@@ -821,6 +909,7 @@ export default function App() {
   /** Cycle de l'assistant : meilleure offre non traitée, dossier préparé et portail ouvert. */
   const handleTriggerAgentCycle = async () => {
     if (agentBusyRef.current) return;
+    if (needAccount('Créez votre compte pour utiliser l’assistant de candidature.')) return;
     if (userProfile.skills.length === 0) {
       showToast('Profil incomplet', 'Importez votre CV pour que l\'assistant puisse évaluer les offres.', true);
       return;
@@ -868,6 +957,8 @@ export default function App() {
    */
   const handleAgentBatch = async (count: number) => {
     if (agentBusyRef.current) return;
+    if (needAccount('Créez votre compte pour utiliser l’assistant de candidature.')) return;
+    track('agent_batch', { count });
     if (userProfile.skills.length === 0 || userProfile.experiences.length === 0) {
       showToast('Profil incomplet', 'Importez votre CV (compétences et expériences) avant de lancer l\'assistant.', true);
       return;
@@ -877,6 +968,7 @@ export default function App() {
     setAgentProgress({ done: 0, total: count });
     let done = 0;
     let failed = 0;
+    let quotaReached = false;
     const tried = new Set<string>();
     try {
       addLog({ type: 'scan', message: `Série lancée : jusqu'à ${count} dossier(s).` });
@@ -909,8 +1001,13 @@ export default function App() {
               continue;
             }
             addLog({ type: 'alert', message: `Échec pour ${t.job.company} : ${e?.message || 'erreur inconnue'}` });
+            if (e?.quotaExceeded) quotaReached = true;
             break;
           }
+        }
+        if (quotaReached) {
+          addLog({ type: 'alert', message: 'Série arrêtée : quota mensuel de votre forfait atteint.' });
+          break;
         }
         if (ok) done++;
         else if (!agentStopRef.current) failed++;
@@ -968,17 +1065,14 @@ export default function App() {
     );
   };
 
-  /** Télécharge le CV du dossier en PDF (LaTeX ou rendu Chromium côté serveur). Renvoie false si impossible. */
+  /** Télécharge le CV du dossier en PDF (rendu Web Chromium ou LaTeX côté serveur). Renvoie false si impossible. */
   const downloadApplicationPdf = async (app: Application): Promise<boolean> => {
     if (!app.latexResumeCode) return false;
     const job = { title: app.jobTitle, company: app.company, skillsRequired: app.skillsRequired || [] };
-    const res = await apiFetch('/api/latex/compile', {
-      latexCode: app.latexResumeCode,
-      candidate: profileRef.current,
-      job,
-      template: app.template || preferredTemplate(),
-      tailored: app.tailoredContent
-    });
+    const payload = { candidate: profileRef.current, job, template: app.template || preferredTemplate(), tailored: app.tailoredContent };
+    // Rendu Web (Chromium), sinon compilation LaTeX du code enregistré
+    let res = await apiFetch('/api/cv/pdf', payload);
+    if (!res.ok) res = await apiFetch('/api/latex/compile', { latexCode: app.latexResumeCode });
     if (!res.ok) return false;
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -1001,9 +1095,9 @@ export default function App() {
     });
     if (isCloudUser(user)) {
       try {
-        await deleteDoc(doc(db, 'users', user.uid, 'applications', appId));
+        await cloud.deleteApplication(user.uid, appId);
       } catch (err) {
-        console.error('Firestore app delete error:', err);
+        console.error('App delete error:', err);
         showToast('Suppression en ligne échouée', 'Réessayez dans un instant.', true);
       }
     }
@@ -1011,6 +1105,7 @@ export default function App() {
 
   /** Sauvegarder / retirer une offre (colonne « Sauvegardées » du suivi). */
   const handleToggleSaveJob = async (job: JobOffer) => {
+    if (needAccount('Créez votre compte pour sauvegarder des offres et suivre vos candidatures.')) return;
     const existing = findExistingApplication(job);
     if (existing) {
       if (existing.status === 'detected' && !existing.latexResumeCode) {
@@ -1023,6 +1118,7 @@ export default function App() {
     }
     const app = buildApplication(job, '', '', 'Offre sauvegardée.');
     await persistApplication({ ...app, status: 'detected' });
+    track('job_saved', { spontaneous: !!job.isSpontaneous });
     showToast('Offre sauvegardée', 'Retrouvez-la dans l’onglet Candidatures.');
   };
 
@@ -1067,9 +1163,11 @@ export default function App() {
       return merged;
     });
     if (isCloudUser(user)) {
-      const results = await Promise.allSettled(owned.map(a => setDoc(doc(db, 'users', user.uid, 'applications', a.id), a)));
-      const failed = results.filter(r => r.status === 'rejected').length;
-      if (failed) showToast('Import partiel', `${failed} dossier(s) n’ont pas pu être enregistrés en ligne.`, true);
+      try {
+        await cloud.saveApplications(user.uid, owned);
+      } catch {
+        showToast('Import partiel', 'Les dossiers importés n’ont pas pu être enregistrés en ligne. Réessayez.', true);
+      }
     }
     showToast('Sauvegarde importée', `${owned.length} candidature(s) restaurée(s).`);
   };
@@ -1086,11 +1184,11 @@ export default function App() {
   const studioJobs = useMemo(() => {
     if (userProfile.skills.length === 0) return jobs.slice(0, 60);
     return jobs
-      .map(j => ({ j, s: calculateCandidateMatch(userProfile.skills, j.skillsRequired).score ?? -1 }))
+      .map(j => ({ j, s: assessFit(userProfile, j).rank }))
       .sort((a, b) => b.s - a.s)
       .slice(0, 60)
       .map(x => x.j);
-  }, [jobs, userProfile.skills]);
+  }, [jobs, userProfile]);
 
   const openLatexForApplication = (app: Application) => {
     const matchedJob = jobs.find(j => j.id === app.jobId) || {
@@ -1121,29 +1219,29 @@ export default function App() {
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         currentUser={currentUser}
-        onOpenAuthModal={(mode) => {
-          setAuthModalMode(mode);
-          setAuthModalOpen(true);
-        }}
+        onOpenAuthModal={(mode) => openAuth(mode)}
         onLogout={handleLogout}
-        onOpenCvUpload={() => {
-          setIsMandatoryOnboarding(false);
-          setCvUploadModalOpen(true);
-        }}
+        onOpenCvUpload={gated ? undefined : openCvUpload}
+        visibleTabs={gated ? ['radar', 'latex'] : undefined}
         autoApplyActive={!!currentUser}
         appliedCount={submittedCount}
         interviewCount={interviewCount}
         followUpDueCount={followUpDueCount}
         applicationsCount={applications.length}
         alertsNewCount={(userProfile.savedSearches || []).reduce((n, s) => n + (s.newCount || 0), 0)}
+        plan={accountUsage?.plan ?? null}
       />
 
       {/* Main Content Area */}
       <main id="contenu" tabIndex={-1} className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-28 lg:pb-12 outline-none">
         
+        {showGate && <AccountGate tab={currentTab} onOpenAuthModal={(mode) => openAuth(mode)} />}
+
         {/* SUB-VIEW 1: LIVE RADAR (CHASSEUR D'OFFRES TEMPS RÉEL) */}
         {currentTab === 'radar' && (
           <JobSearchView
+            signedIn={signedIn}
+            onOpenAuthModal={(mode) => openAuth(mode)}
             jobs={jobs}
             jobsMeta={jobsMeta}
             initialSearch={lastParams.current}
@@ -1163,20 +1261,18 @@ export default function App() {
             onSearch={handleFetchLiveJobs}
             onToggleSave={handleToggleSaveJob}
             onPrepare={(job) => {
+              if (needAccount('Créez votre compte pour adapter votre CV et votre lettre à cette offre.')) return;
               setSelectedAppForLatex(findExistingApplication(job) || null);
               setSelectedJobForLatex(job);
             }}
             onExpressApply={handleInstantAutoApply}
             busy={isAgentRunning}
-            onOpenCvUpload={() => {
-              setIsMandatoryOnboarding(false);
-              setCvUploadModalOpen(true);
-            }}
+            onOpenCvUpload={openCvUpload}
           />
         )}
 
         {/* SUB-VIEW 2: AGENT AUTOMATION (LE PILOTE AUTOMATIQUE) */}
-        {currentTab === 'agent' && (
+        {!showGate && currentTab === 'agent' && (
           <AgentAutomationView
             userProfile={userProfile}
             onSaveSettings={(patch) => { handleSaveProfile({ ...userProfile, ...patch }, { silent: true }).catch(() => {}); }}
@@ -1199,24 +1295,39 @@ export default function App() {
         )}
 
         {/* SUB-VIEW 3: STUDIO LATEX & OVERLEAF (DIRECT VIEW) */}
-        {currentTab === 'latex' && (
+        {!showGate && currentTab === 'latex' && (
           <div>
             <PageHeader
               title="Studio CV"
-              subtitle={studioJobs.length < jobs.length
-                ? `Les ${studioJobs.length} offres les plus compatibles avec votre profil. Choisissez-en une pour générer un CV LaTeX et une lettre adaptés.`
-                : 'Choisissez une offre pour générer un CV LaTeX et une lettre adaptés, à relire puis compiler en PDF.'}
+              subtitle="Adaptez votre CV et votre lettre à une offre : collez une annonce trouvée ailleurs, ou choisissez parmi vos résultats de recherche."
             />
+            <div className="mb-6">
+              <OfferMatchView
+                userProfile={userProfile}
+                signedIn={signedIn}
+                onOpenCvUpload={openCvUpload}
+                onOpenStudio={(job, tailored, analysis) => {
+                  setPastedDossier({ jobId: job.id, tailored, analysis });
+                  setSelectedAppForLatex(findExistingApplication(job) || null);
+                  setSelectedJobForLatex(job);
+                }}
+              />
+            </div>
+            {studioJobs.length > 0 && (
+              <h2 className="mb-3 text-base font-bold text-slate-900">
+                {studioJobs.length < jobs.length ? `Les ${studioJobs.length} offres de votre recherche qui vous correspondent le mieux` : 'Offres de votre recherche'}
+              </h2>
+            )}
             {studioJobs.length === 0 ? (
               <div className="rounded-2xl border border-slate-200 bg-white">
-                <EmptyState icon={<FileCode2 className="h-6 w-6" />} title="Aucune offre chargée" action={<Button variant="primary" onClick={() => setCurrentTab('radar')}>Rechercher des offres</Button>}>
-                  Lancez une recherche dans l’onglet Offres pour préparer un CV adapté.
+                <EmptyState icon={<FileCode2 className="h-6 w-6" />} title="Aucune offre de recherche" action={<Button variant="primary" onClick={() => setCurrentTab('radar')}>Rechercher des offres</Button>}>
+                  Collez une offre ci-dessus, ou lancez une recherche dans l’onglet Offres.
                 </EmptyState>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {studioJobs.map((job) => {
-                  const m = calculateCandidateMatch(userProfile.skills, job.skillsRequired);
+                  const m = assessFit(userProfile, job);
                   const existing = findExistingApplication(job);
                   return (
                     <div key={job.id} className="flex flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 hover:border-slate-300 hover:shadow-sm transition-all">
@@ -1228,9 +1339,9 @@ export default function App() {
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             <Badge tone="brand">{CONTRACT_LABELS[job.contractType] || job.contractType}</Badge>
                             {existing?.latexResumeCode && <Badge tone="green">CV déjà généré</Badge>}
+                            {signedIn && <FitBadge level={m.level} />}
                           </div>
                         </div>
-                        {userProfile.skills.length > 0 && <MatchRing score={m.score} size={40} />}
                       </div>
                       <Button
                         variant={existing?.latexResumeCode ? 'secondary' : 'primary'}
@@ -1248,7 +1359,7 @@ export default function App() {
         )}
 
         {/* SUB-VIEW 4: KANBAN CRM */}
-        {currentTab === 'kanban' && (
+        {!showGate && currentTab === 'kanban' && (
           <KanbanCrmView
             applications={applications}
             onOpenLatexForApp={openLatexForApplication}
@@ -1264,7 +1375,7 @@ export default function App() {
         )}
 
         {/* SUB-VIEW 5: COCKPIT ENTRETIENS */}
-        {currentTab === 'interview' && (() => {
+        {!showGate && currentTab === 'interview' && (() => {
           const interviewApps = applications
             .filter(a => a.status !== 'rejected' && a.status !== 'detected')
             .sort((a, b) => (a.status === 'interview' ? -1 : 0) - (b.status === 'interview' ? -1 : 0));
@@ -1307,30 +1418,55 @@ export default function App() {
         })()}
 
         {/* SUB-VIEW 6: MASTER PROFILE */}
-        {currentTab === 'profile' && (
+        {!showGate && currentTab === 'profile' && (
           <MasterProfileView
             userProfile={userProfile}
             onSaveProfile={(p) => handleSaveProfile(p)}
             isSaving={isSavingProfile}
             currentUser={currentUser}
-            onOpenAuthModal={(mode) => {
-              setAuthModalMode(mode);
-              setAuthModalOpen(true);
+            onOpenAuthModal={(mode) => openAuth(mode)}
+            onOpenCvUpload={openCvUpload}
+            showToast={showToast}
+            onAccountDeleted={async () => {
+              await cloud.signOut().catch(() => {});
+              setCurrentUser(null);
+              setUserProfile(EMPTY_PROFILE);
+              setApplications([]);
+              setCurrentTab('radar');
             }}
-            onOpenCvUpload={() => {
+          />
+        )}
+
+        {isPublicTool(currentTab) && (
+          <ToolsView
+            tool={currentTab as 'ats' | 'match'}
+            onToolChange={(t) => setCurrentTab(t)}
+            onCreateCv={() => {
               setIsMandatoryOnboarding(false);
               setCvUploadModalOpen(true);
             }}
           />
         )}
 
+        {currentTab === 'pricing' && (
+          <PricingView
+            usage={accountUsage}
+            signedIn={signedIn}
+            onOpenAuthModal={(mode) => openAuth(mode)}
+            showToast={showToast}
+            paymentStatus={paymentStatus}
+          />
+        )}
+
       </main>
+
 
       {/* AUTHENTICATION & ACCOUNT CREATION MODAL */}
       <AuthModal
         isOpen={authModalOpen}
-        onClose={() => setAuthModalOpen(false)}
+        onClose={() => { setAuthModalOpen(false); setAuthReason(undefined); }}
         defaultMode={authModalMode}
+        reason={authReason}
         onSuccess={(user, isNewAccount, extra) => {
           if (!isCloudUser(user)) {
             // Session locale : on charge son propre espace de stockage
@@ -1344,19 +1480,9 @@ export default function App() {
             return;
           }
           if (isNewAccount) {
-            // Le profil Firestore est créé par onAuthStateChanged ; on lui transmet le nom / titre saisis
-            pendingSignupRef.current = { uid: user.uid, fullName: extra?.fullName, title: extra?.title };
-            const patch: Partial<UserProfile> = { userId: user.uid };
-            if (extra?.fullName) patch.fullName = extra.fullName;
-            if (extra?.title) patch.title = extra.title;
-            // Écriture « merge » limitée à ces champs : ne peut rien écraser d'autre
-            setDoc(doc(db, 'users', user.uid), patch, { merge: true }).catch(() => {});
-            setUserProfile(prev => (prev.userId === user.uid || !prev.userId)
-              ? { ...prev, userId: user.uid, fullName: prev.fullName || extra?.fullName || '', title: prev.title || extra?.title || '' }
-              : prev);
+            // Le profil en ligne est créé au premier chargement du compte (nom et titre : métadonnées du compte)
+            track('signup');
             showToast('Compte créé', 'Déposez maintenant votre CV pour que vos informations soient extraites.');
-            setIsMandatoryOnboarding(true);
-            setCvUploadModalOpen(true);
           } else {
             showToast('Connexion réussie', 'Vos données sont synchronisées.');
           }
@@ -1382,21 +1508,23 @@ export default function App() {
       {selectedJobForLatex && (
         <LatexStudioModal
           key={`${selectedJobForLatex.id}-${selectedAppForLatex?.id || 'new'}`}
+          signedIn={signedIn}
           job={selectedJobForLatex}
           userProfile={userProfile}
           initialLatexCode={selectedAppForLatex?.latexResumeCode}
           initialLetter={selectedAppForLatex?.coverLetter}
           initialTemplate={selectedAppForLatex?.template}
           versions={selectedAppForLatex?.versions}
-          initialTailored={selectedAppForLatex?.tailoredContent}
-          initialAnalysis={selectedAppForLatex?.offerAnalysis}
+          initialTailored={pastedDossier?.jobId === selectedJobForLatex.id ? pastedDossier.tailored : selectedAppForLatex?.tailoredContent}
+          initialAnalysis={pastedDossier?.jobId === selectedJobForLatex.id ? pastedDossier.analysis : selectedAppForLatex?.offerAnalysis}
           onTemplateChange={(t) => {
             if (t !== userProfile.preferredTemplate) {
               handleSaveProfile({ ...userProfile, preferredTemplate: t }, { silent: true }).catch(() => {});
             }
           }}
-          onClose={() => { setSelectedJobForLatex(null); setSelectedAppForLatex(null); }}
+          onClose={() => { setSelectedJobForLatex(null); setSelectedAppForLatex(null); setPastedDossier(null); }}
           onApplyWithLatex={async (job, latexCode, coverLetter, template, tailored, analysis) => {
+            track('dossier_validated', { template, tailored: !!tailored });
             const existing = findExistingApplication(job);
             if (existing) {
               // Mise à jour du dossier existant (pas de doublon) ; l'ancienne version est archivée
@@ -1472,6 +1600,20 @@ export default function App() {
         </div>
       )}
 
+
+      {/* Toujours au premier plan (y compris au-dessus du Studio) */}
+      <UpgradeModal
+        detail={quotaDetail}
+        onClose={() => setQuotaDetail(null)}
+        onSeePlans={() => {
+          setQuotaDetail(null);
+          // Les fenêtres ouvertes (Studio, entretien) masqueraient la page Tarifs
+          setSelectedJobForLatex(null);
+          setSelectedAppForLatex(null);
+          setSelectedAppForInterview(null);
+          setCurrentTab('pricing');
+        }}
+      />
     </div>
   );
 }

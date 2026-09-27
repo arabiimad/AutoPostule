@@ -10,11 +10,14 @@ import {
   Link as LinkIcon,
   CheckCircle2,
   UserRound,
+  Camera,
   X
 } from 'lucide-react';
 import { UserProfile, ContractType } from '../types';
-import { User } from 'firebase/auth';
+import { isCloudUser, type AppUser as User } from '../data/cloud';
+import { AccountDataCard } from './AccountDataCard';
 import { Button, PageHeader, cx } from './ui';
+import { photoFileError, squareJpegPhoto } from '../utils/photo';
 
 interface MasterProfileViewProps {
   userProfile: UserProfile;
@@ -23,6 +26,9 @@ interface MasterProfileViewProps {
   currentUser?: User | null;
   onOpenAuthModal?: (mode: 'login' | 'register') => void;
   onOpenCvUpload?: () => void;
+  /** Compte supprimé (retour à une session vide). */
+  onAccountDeleted?: () => void;
+  showToast?: (title: string, desc: string, error?: boolean) => void;
 }
 
 export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
@@ -31,11 +37,16 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
   isSaving,
   currentUser,
   onOpenAuthModal,
-  onOpenCvUpload
+  onOpenCvUpload,
+  onAccountDeleted,
+  showToast
 }) => {
   const [profile, setProfile] = useState<UserProfile>(userProfile);
   const [newSkill, setNewSkill] = useState('');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [isDraggingPhoto, setIsDraggingPhoto] = useState(false);
+  const photoInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setProfile(userProfile);
@@ -59,6 +70,22 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
       ...prev,
       skills: prev.skills.filter(s => s !== skillToRemove)
     }));
+  };
+
+  const handlePhotoFile = async (file?: File) => {
+    setPhotoError(null);
+    if (!file) return;
+    const error = photoFileError(file);
+    if (error) {
+      setPhotoError(error);
+      return;
+    }
+    try {
+      const photo = await squareJpegPhoto(file);
+      setProfile(prev => ({ ...prev, photo }));
+    } catch {
+      setPhotoError('Impossible de lire cette image : essayez une autre photo.');
+    }
   };
 
   const handleToggleContract = (contract: ContractType) => {
@@ -109,7 +136,7 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
       {/* En-tête */}
       <PageHeader
         title="Mon profil"
-        subtitle="La base de vos candidatures : le score de compatibilité, les CV et les lettres n’utilisent que ce qui est écrit ici."
+        subtitle="La base de vos candidatures : l’adéquation avec les offres, les CV et les lettres n’utilisent que ce qui est écrit ici."
         actions={
           <>
             {onOpenCvUpload && (
@@ -127,7 +154,7 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
       />
 
       {/* État du compte */}
-      {currentUser ? (
+      {isCloudUser(currentUser) ? (
         <div className="flex flex-col justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
@@ -177,6 +204,49 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
               <UserRound className="h-4 w-4 text-brand-600" aria-hidden="true" />
               Coordonnées
             </h2>
+            {/* Zone photo : glisser-déposer une image, ou bouton (clavier, mobile) */}
+            <div
+              data-testid="photo-dropzone"
+              onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDraggingPhoto(true); }}
+              onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDraggingPhoto(false); }}
+              onDrop={(e) => { e.preventDefault(); setIsDraggingPhoto(false); handlePhotoFile(e.dataTransfer.files?.[0]); }}
+              className={cx(
+                'flex items-center gap-4 rounded-xl border-2 border-dashed p-3 transition-colors',
+                isDraggingPhoto ? 'border-brand-500 bg-brand-50' : 'border-slate-200'
+              )}
+            >
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100 ring-1 ring-slate-200">
+                {profile.photo
+                  ? <img src={profile.photo} alt="Votre photo de CV" className="h-full w-full object-cover" />
+                  : <UserRound className="h-7 w-7 text-slate-400" aria-hidden="true" />}
+              </div>
+              <div className="min-w-0 space-y-1.5">
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="secondary" onClick={() => photoInputRef.current?.click()}>
+                    <Camera className="h-3.5 w-3.5" aria-hidden="true" />
+                    {profile.photo ? 'Changer la photo' : 'Ajouter une photo'}
+                  </Button>
+                  {profile.photo && (
+                    <Button type="button" size="sm" variant="ghost" onClick={() => { setProfile(prev => ({ ...prev, photo: '' })); setPhotoError(null); }}>
+                      Retirer
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500">
+                  {isDraggingPhoto ? 'Déposez la photo ici.' : 'Glissez votre photo ici, ou cliquez sur le bouton. Facultative : affichée seulement sur le CV « Photo », jamais envoyée à l’IA.'}
+                </p>
+              </div>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="sr-only"
+                tabIndex={-1}
+                aria-label="Choisir une photo de CV"
+                onChange={(e) => { handlePhotoFile(e.target.files?.[0]); e.target.value = ''; }}
+              />
+            </div>
+            {photoError && <p role="alert" className="text-sm text-rose-700">{photoError}</p>}
             <div className="space-y-3">
               {field('fullName', 'Nom complet', { autoComplete: 'name' })}
               {field('title', 'Poste recherché', { autoComplete: 'organization-title' })}
@@ -247,7 +317,7 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
                 Compétences ({profile.skills.length})
               </h2>
               <p className="mt-1 text-xs text-slate-500">
-                Elles servent au calcul de compatibilité et sont mises en avant dans vos CV. N'ajoutez que des compétences réelles.
+                Elles servent à évaluer votre adéquation avec les offres et sont mises en avant dans vos CV. N'ajoutez que des compétences réelles.
               </p>
             </div>
 
@@ -375,6 +445,12 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
         </div>
 
       </div>
+
+      {isCloudUser(currentUser) && onAccountDeleted && (
+        <div className="mt-6">
+          <AccountDataCard email={currentUser.email} onDeleted={onAccountDeleted} showToast={showToast} />
+        </div>
+      )}
 
     </form>
   );

@@ -9,6 +9,8 @@ export function e2eServerEnv() {
     NODE_ENV: 'production',
     PORT: String(APP_PORT),
     AUTH_MODE: 'off',
+    // Quotas : larges, sauf les retouches (1) pour tester la fenêtre « Passer à Premium »
+    QUOTAS: 'on', QUOTA_FREE_CV: '50', QUOTA_FREE_LETTER: '50', QUOTA_FREE_IMPORT: '50', QUOTA_FREE_INTERVIEW: '50', QUOTA_FREE_REWRITE: '1',
     GEMINI_API_KEY: 'e2e',
     GEMINI_API_BASE_URL: m,
     LBA_API_KEY: 'e2e', FT_CLIENT_ID: 'e2e', FT_CLIENT_SECRET: 'e2e', JSEARCH_API_KEY: 'e2e', ADZUNA_APP_ID: 'e2e', ADZUNA_APP_KEY: 'e2e', JOOBLE_API_KEY: 'e2e',

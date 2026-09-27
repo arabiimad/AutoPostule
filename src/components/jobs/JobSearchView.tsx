@@ -3,10 +3,11 @@ import { Search, MapPin, SlidersHorizontal, X, Info, AlertTriangle, SearchX, Upl
 import type { Application, JobOffer, SavedSearch, UserProfile } from '../../types';
 import { readSearch, readSelectedJob, writeUrl, jobShareUrl, type SearchUrlState } from '../../utils/url';
 import type { JobsMeta } from '../../App';
-import { calculateCandidateMatch, type CandidateMatch } from '../../utils/skillMatcher';
+import { assessFit, type JobFit } from '../../utils/skillMatcher';
 import { filterJobs } from '../../utils/jobFilter';
 import { ageInDays, sourceShortName } from '../../utils/format';
 import { Button, EmptyState, cx } from '../ui';
+import { accountsRequired } from '../../data/cloud';
 import { JobCard, JobCardSkeleton } from './JobCard';
 import { JobDetail } from './JobDetail';
 
@@ -21,6 +22,9 @@ interface JobSearchViewProps {
   onPrepare: (job: JobOffer) => void;
   onExpressApply: (job: JobOffer) => void;
   onOpenCvUpload?: () => void;
+  /** Compte en ligne : l'adéquation n'est montrée qu'aux utilisateurs connectés. */
+  signedIn?: boolean;
+  onOpenAuthModal?: (mode: 'login' | 'register') => void;
   busy?: boolean;
   /** Recherche à afficher au montage (URL ou dernière recherche). */
   initialSearch?: SearchUrlState;
@@ -97,13 +101,13 @@ const FilterSelect: React.FC<{ value: string | number; onChange: (v: string) => 
 );
 
 export const JobSearchView: React.FC<JobSearchViewProps> = ({
-  jobs, jobsMeta, userProfile, applications, isLoading, onSearch, onToggleSave, onPrepare, onExpressApply, onOpenCvUpload, busy,
+  jobs, jobsMeta, userProfile, applications, isLoading, onSearch, onToggleSave, onPrepare, onExpressApply, onOpenCvUpload, signedIn = false, onOpenAuthModal, busy,
   initialSearch, onLoadMore, loadingMore, savedSearches = [], onSaveSearch, onOpenSavedSearch, onRemoveSavedSearch,
   onCheckAlerts, checkingAlerts, notificationsOn, onEnableNotifications
 }) => {
   const isDesktop = useIsDesktop();
   const isLive = jobsMeta?.mode === 'live';
-  const hasProfile = userProfile.skills.length > 0;
+  const hasProfile = signedIn && userProfile.skills.length > 0;
   const init = initialSearch || { query: '', location: '', radius: 30, contractType: 'tous' };
 
   const [query, setQuery] = useState(init.query);
@@ -114,7 +118,7 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
   const [welcomeHidden, setWelcomeHidden] = useState(() => readFlag(WELCOME_KEY));
   const [remote, setRemote] = useState('tous');
   const [maxAge, setMaxAge] = useState(0);
-  const [minScore, setMinScore] = useState(0);
+  const [minFit, setMinFit] = useState('toutes');
   const [source, setSource] = useState('toutes');
   const [sort, setSort] = useState('relevance');
   const [visible, setVisible] = useState(PAGE);
@@ -184,17 +188,17 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
       .filter(j => !maxAge || (ageInDays(j.publishedAt) ?? 0) <= maxAge)
       .filter(j => source === 'toutes' || (j.origin === 'demo' ? 'Démo' : sourceShortName(j.source)) === source)
       .filter(j => kind === 'toutes' || (kind === 'spontanees' ? !!j.isSpontaneous : !j.isSpontaneous))
-      .map(job => ({ job, match: calculateCandidateMatch(userProfile.skills, job.skillsRequired) as CandidateMatch }))
-      .filter(({ match }) => !hasProfile || minScore <= 0 || (match.score ?? 0) >= minScore);
+      .map(job => ({ job, match: assessFit(userProfile, job) as JobFit }))
+      .filter(({ match }) => !hasProfile || minFit === 'toutes' || match.level === 'forte' || (minFit === 'moyenne' && match.level === 'moyenne'));
 
     // Les candidatures spontanées (sans date) restent après les offres publiées
     const byDate = (a: JobOffer, b: JobOffer) => (Number(!!a.isSpontaneous) - Number(!!b.isSpontaneous)) || ((ageInDays(a.publishedAt) ?? 999) - (ageInDays(b.publishedAt) ?? 999));
     if (sort === 'date' || (sort === 'relevance' && !hasProfile)) base.sort((a, b) => byDate(a.job, b.job));
-    else if (sort === 'match') base.sort((a, b) => (b.match.score ?? -1) - (a.match.score ?? -1));
-    // Pertinence : compatibilité par tranches de 10 points, puis fraîcheur de l'offre
-    else base.sort((a, b) => (Number(!!a.job.isSpontaneous) - Number(!!b.job.isSpontaneous)) || (Math.floor((b.match.score ?? 0) / 10) - Math.floor((a.match.score ?? 0) / 10)) || byDate(a.job, b.job));
+    else if (sort === 'match') base.sort((a, b) => b.match.rank - a.match.rank || byDate(a.job, b.job));
+    // Pertinence : adéquation par tranches, puis fraîcheur de l'offre
+    else base.sort((a, b) => (Number(!!a.job.isSpontaneous) - Number(!!b.job.isSpontaneous)) || (Math.floor(b.match.rank / 20) - Math.floor(a.match.rank / 20)) || byDate(a.job, b.job));
     return base;
-  }, [jobs, isLive, query, submitted, location, contract, remote, maxAge, source, kind, userProfile.skills, hasProfile, minScore, sort]);
+  }, [jobs, isLive, query, submitted, location, contract, remote, maxAge, source, kind, userProfile, hasProfile, minFit, sort]);
   const hasSpontaneous = useMemo(() => jobs.some(j => j.isSpontaneous), [jobs]);
 
   // Sélection par défaut (bureau) : première offre ; conservée si toujours présente
@@ -240,11 +244,11 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
     }
   }, [mobileDetail, isDesktop]);
 
-  const activeFilters = (contract !== 'tous' ? 1 : 0) + (remote !== 'tous' ? 1 : 0) + (maxAge ? 1 : 0) + (minScore ? 1 : 0) + (source !== 'toutes' ? 1 : 0) + (kind !== 'toutes' ? 1 : 0);
-  const resetFilters = () => { setRemote('tous'); setMaxAge(0); setMinScore(0); setSource('toutes'); setKind('toutes'); if (contract !== 'tous') changeContract('tous'); };
+  const activeFilters = (contract !== 'tous' ? 1 : 0) + (remote !== 'tous' ? 1 : 0) + (maxAge ? 1 : 0) + (minFit !== 'toutes' ? 1 : 0) + (source !== 'toutes' ? 1 : 0) + (kind !== 'toutes' ? 1 : 0);
+  const resetFilters = () => { setRemote('tous'); setMaxAge(0); setMinFit('toutes'); setSource('toutes'); setKind('toutes'); if (contract !== 'tous') changeContract('tous'); };
   const currentSearch: SearchUrlState = { query: submitted.query, location: submitted.location, radius, contractType: contract };
   const isSaved = savedSearches.some(s => s.query.trim().toLowerCase() === submitted.query.trim().toLowerCase() && s.location.trim().toLowerCase() === submitted.location.trim().toLowerCase() && (s.contractType || 'tous') === contract && Number(s.radius) === Number(radius));
-  const showWelcome = !hasProfile && applications.length === 0 && !welcomeHidden;
+  const showWelcome = userProfile.skills.length === 0 && applications.length === 0 && !welcomeHidden;
 
   const sourceSummary = isLive && jobsMeta?.sources
     ? Object.entries(jobsMeta.sources).filter(([, s]) => s?.enabled && s.count > 0).map(([k, s]) => `${SOURCE_NAMES[k] || k} ${s!.count}`).join(' · ')
@@ -255,6 +259,8 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
       key={selected.job.id}
       job={selected.job}
       match={selected.match}
+      signedIn={signedIn}
+      onOpenAuthModal={onOpenAuthModal}
       userProfile={userProfile}
       application={applicationFor(selected.job)}
       onToggleSave={() => onToggleSave(selected.job)}
@@ -318,8 +324,8 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
             {sourceOptions.length > 2 && <FilterSelect label="Source" value={source} onChange={setSource} options={sourceOptions} active={source !== 'toutes'} />}
             {hasSpontaneous && <FilterSelect label="Type" value={kind} onChange={setKind} options={KINDS} active={kind !== 'toutes'} />}
             {hasProfile && (
-              <FilterSelect label="Compatibilité minimale" value={minScore} onChange={(v) => setMinScore(Number(v))} active={!!minScore}
-                options={[{ id: 0, label: 'Toute compatibilité' }, { id: 30, label: 'Compatibilité ≥ 30 %' }, { id: 50, label: 'Compatibilité ≥ 50 %' }, { id: 75, label: 'Compatibilité ≥ 75 %' }]} />
+              <FilterSelect label="Adéquation" value={minFit} onChange={(v) => setMinFit(String(v))} active={minFit !== 'toutes'}
+                options={[{ id: 'toutes', label: 'Toutes les offres' }, { id: 'moyenne', label: 'Moyenne ou forte' }, { id: 'forte', label: 'Forte uniquement' }]} />
             )}
             {activeFilters > 0 && <Button variant="ghost" size="sm" onClick={resetFilters}>Effacer les filtres</Button>}
           </div>
@@ -331,14 +337,16 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 sm:p-6" aria-labelledby="welcome-title">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 id="welcome-title" className="flex items-center gap-2 text-base font-semibold text-slate-900"><Sparkles className="h-4 w-4 text-brand-600" /> Bienvenue sur AutoPostule</h2>
+              <h2 id="welcome-title" className="flex items-center gap-2 text-base font-semibold text-slate-900"><Sparkles className="h-4 w-4 text-brand-600" /> Bienvenue sur Kareer</h2>
               <p className="mt-0.5 text-sm text-slate-500">Trois étapes pour postuler plus vite, sans rien inventer sur votre profil.</p>
             </div>
             <button onClick={() => { writeFlag(WELCOME_KEY); setWelcomeHidden(true); }} aria-label="Masquer les premiers pas" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>
           </div>
           <ol className="mt-4 grid gap-3 sm:grid-cols-3">
             {[
-              { n: 1, title: 'Importez votre CV', text: 'PDF, Word ou image : vos compétences et expériences sont extraites.', action: onOpenCvUpload && <Button variant="primary" size="sm" onClick={onOpenCvUpload}><Upload className="h-3.5 w-3.5" /> Importer</Button> },
+              accountsRequired && !signedIn
+                ? { n: 1, title: 'Créez votre compte gratuit', text: 'Puis importez votre CV (PDF, Word ou image) : vos compétences et expériences sont extraites.', action: onOpenAuthModal && <Button variant="primary" size="sm" onClick={() => onOpenAuthModal('register')}>Créer un compte</Button> }
+                : { n: 1, title: 'Importez votre CV', text: 'PDF, Word ou image : vos compétences et expériences sont extraites.', action: onOpenCvUpload && <Button variant="primary" size="sm" onClick={onOpenCvUpload}><Upload className="h-3.5 w-3.5" /> Importer</Button> },
               { n: 2, title: 'Trouvez des offres', text: 'France Travail, La bonne alternance, LinkedIn, Indeed… réunis et triés selon votre profil.' },
               { n: 3, title: 'Préparez chaque dossier', text: 'CV LaTeX et lettre adaptés à l’offre, puis suivi, relances et entretiens.', icon: FileText }
             ].map(step => (
@@ -376,13 +384,19 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
       )}
 
       {/* Bandeaux */}
-      {!hasProfile && onOpenCvUpload && !showWelcome && (
+      {!hasProfile && !showWelcome && (signedIn ? onOpenCvUpload : onOpenAuthModal) && (
         <div className="mt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-brand-200 bg-brand-50 px-5 py-4">
           <div>
-            <p className="text-sm font-semibold text-brand-900">Obtenez un score de compatibilité pour chaque offre</p>
-            <p className="text-sm text-brand-800/80">Importez votre CV : vos compétences sont extraites et comparées à chaque annonce, sans rien inventer.</p>
+            <p className="text-sm font-semibold text-brand-900">Voyez quelles offres vous correspondent vraiment</p>
+            <p className="text-sm text-brand-800/80">
+              {signedIn
+                ? 'Importez votre CV : votre métier et vos compétences sont comparés à chaque annonce, sans rien inventer.'
+                : 'Créez un compte gratuit et importez votre CV : chaque annonce indique son adéquation avec votre parcours, et pourquoi.'}
+            </p>
           </div>
-          <Button variant="primary" size="md" onClick={onOpenCvUpload}><Upload className="h-4 w-4" /> Importer mon CV</Button>
+          {signedIn
+            ? <Button variant="primary" size="md" onClick={onOpenCvUpload}><Upload className="h-4 w-4" /> Importer mon CV</Button>
+            : <Button variant="primary" size="md" onClick={() => onOpenAuthModal?.('register')}>Créer un compte gratuit</Button>}
         </div>
       )}
       {(jobsMeta?.warnings?.length ?? 0) > 0 && (

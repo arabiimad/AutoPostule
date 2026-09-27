@@ -191,9 +191,20 @@ function isoOrUndefined(v: any): string | undefined {
   return isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
+/**
+ * Retire les phrases de consignes de candidature (« joindre un CV au format Word ou PDF ») :
+ * elles ne décrivent pas le poste et faisaient apparaître « Pack Office » dans une offre de maçon.
+ */
+export function stripApplicationInstructions(description: string): string {
+  return String(description || "")
+    .split(/(?<=[.!?])\s+|\n+/)
+    .filter((s) => !/\b(postul|candidat|curriculum|joign|joindre|envoy|adress|transmet)\w*|\bCV\b|\bformat\s+(word|pdf|doc)/i.test(s))
+    .join("\n");
+}
+
 /** Compétences exploitables pour le score : compétences listées + compétences reconnues dans le texte. */
 function deriveSkills(listed: string[], title: string, description: string): string[] {
-  const fromText = extractTechnologies(`${title}\n${description}`);
+  const fromText = extractTechnologies(`${title}\n${stripApplicationInstructions(description)}`);
   const short = listed.filter((s) => s && s.length <= 60);
   return Array.from(new Set([...fromText, ...short])).slice(0, 15);
 }
