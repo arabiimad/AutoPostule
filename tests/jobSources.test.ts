@@ -108,7 +108,8 @@ test('recherche combinée : LBA + France Travail, dédoublonnage, jeton mis en c
       assert.equal(init.headers.Authorization, 'Bearer tok');
       assert.match(url, /commune=84007/);
       assert.match(url, /motsCles=developpeur/);
-      return res(206, { resultats: [FT_OFFER] });
+      // Offre en alternance chez France Travail, relayée aussi par La bonne alternance
+      return res(206, { resultats: [{ ...FT_OFFER, alternance: true }] });
     }
     throw new Error('URL inattendue ' + url);
   });
@@ -143,4 +144,39 @@ test('stage : France Travail ignoré avec avertissement ; panne d\'une source si
   assert.match(r2.sources.laBonneAlternance.error || '', /LBA_API_KEY/);
   assert.ok(r2.warnings.some(w => /La bonne alternance indisponible/.test(w)));
   assert.equal(r2.sources.franceTravail.count, 0);
+});
+
+test('rien n’est supposé : date inconnue laissée vide, contrat non précisé', async () => {
+  const { normalizeFtJob, normalizeJSearchJob, normalizeAdzunaJob, normalizeJoobleJob, inferContract } = await import('../server/jobSources.ts');
+  const ft = normalizeFtJob({ id: '1', intitule: 'Assistant H/F', description: 'Poste à pourvoir.', lieuTravail: { libelle: 'Avignon' }, entreprise: { nom: 'X' } })!;
+  assert.equal(ft.publishedAt, '');
+  assert.equal(ft.contractType, 'non-precise');
+  const js = normalizeJSearchJob({ job_id: 'j', job_title: 'Développeur', employer_name: 'Y', job_employment_type: 'FULLTIME', job_description: 'Rejoignez-nous.', job_apply_link: 'https://y.fr' })!;
+  assert.equal(js.contractType, 'non-precise', 'temps plein ≠ CDI');
+  assert.equal(js.publishedAt, '');
+  assert.equal(normalizeJSearchJob({ job_id: 'k', job_title: 'Stagiaire', employer_name: 'Y', job_employment_type: 'INTERN', job_description: '', job_apply_link: 'https://y.fr' })!.contractType, 'stage');
+  assert.equal(normalizeAdzunaJob({ id: 'a', title: 'Comptable', description: 'Poste', company: { display_name: 'Z' }, location: { display_name: 'Lyon' }, redirect_url: 'https://z.fr' })!.contractType, 'non-precise');
+  assert.equal(normalizeAdzunaJob({ id: 'b', title: 'Comptable', description: 'Poste', company: { display_name: 'Z' }, location: { display_name: 'Lyon' }, redirect_url: 'https://z.fr', contract_type: 'permanent' })!.contractType, 'cdi');
+  assert.equal(normalizeJoobleJob({ id: 1, title: 'Vendeur', company: 'W', location: 'Paris', snippet: 'Temps partiel', link: 'https://w.fr', type: 'Temps partiel' })?.contractType ?? 'non-precise', 'non-precise');
+  assert.equal(inferContract('Poste en CDI à Lyon'), 'cdi');
+  assert.equal(inferContract('Poste à Lyon'), 'non-precise');
+});
+
+test('fusion des doublons : seulement si l’offre est vraiment la même', async () => {
+  const { mergeDuplicates } = await import('../server/jobSources.ts');
+  const base = { title: 'Vendeur H/F', location: 'Paris 75011', description: '', skillsRequired: [], remote: 'non-precise', applyUrl: '', publishedAt: '' } as any;
+  const job = (o: any) => ({ ...base, ...o });
+  // Employeur inconnu d'un côté : pas de fusion
+  assert.equal(mergeDuplicates([job({ id: 'ft-1', origin: 'france-travail', company: 'Entreprise non communiquée', contractType: 'cdi' }), job({ id: 'adz-1', origin: 'adzuna', company: 'Decathlon', contractType: 'cdi' })]).length, 2);
+  // Nom court inclus dans un autre : pas de fusion
+  assert.equal(mergeDuplicates([job({ id: 'a', origin: 'adzuna', company: 'SA', contractType: 'cdi' }), job({ id: 'b', origin: 'jooble', company: 'SAS Dupont', contractType: 'cdi' })]).length, 2);
+  // Contrats différents : pas de fusion
+  assert.equal(mergeDuplicates([job({ id: 'c', origin: 'adzuna', company: 'Decathlon', contractType: 'cdi' }), job({ id: 'd', origin: 'jooble', company: 'Decathlon', contractType: 'stage' })]).length, 2);
+  // Même offre sur deux plateformes : fusionnée, contrat et date complétés
+  const merged = mergeDuplicates([
+    job({ id: 'e', origin: 'jsearch', company: 'Mistral Numérique', contractType: 'non-precise', title: 'Développeur React (H/F)', location: 'Avignon' }),
+    job({ id: 'f', origin: 'adzuna', company: 'Mistral Numérique', contractType: 'cdi', title: 'Développeur React H/F', location: 'Avignon, Vaucluse', publishedAt: '2026-09-20T00:00:00.000Z', applyUrl: 'https://adz/1' })
+  ]);
+  assert.equal(merged.length, 1);
+  assert.deepEqual([merged[0].contractType, merged[0].publishedAt], ['cdi', '2026-09-20T00:00:00.000Z']);
 });

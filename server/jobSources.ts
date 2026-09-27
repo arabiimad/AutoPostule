@@ -239,7 +239,7 @@ export function normalizeLbaJob(j: any): JobOffer | null {
     source: partner === "La bonne alternance" ? "La bonne alternance" : `${partner} (via La bonne alternance)`,
     origin: "la-bonne-alternance",
     applyUrl: String(j.apply?.url || "https://labonnealternance.apprentissage.beta.gouv.fr/"),
-    publishedAt: isoOrUndefined(j.offer?.publication?.creation) || new Date().toISOString(),
+    publishedAt: isoOrUndefined(j.offer?.publication?.creation) || "",
     expiresAt: isoOrUndefined(j.offer?.publication?.expiration),
     status: j.offer?.status && j.offer.status !== "Active" ? "expired" : "active",
     domain: j.offer?.target_diploma?.label ? `Niveau visé : ${j.offer.target_diploma.label}` : undefined,
@@ -398,7 +398,7 @@ export function normalizeFtJob(o: any): JobOffer | null {
     location: String(lieu.libelle || lieu.commune || ""),
     latitude: typeof lieu.latitude === "number" ? lieu.latitude : undefined,
     longitude: typeof lieu.longitude === "number" ? lieu.longitude : undefined,
-    contractType: isAlternance ? "alternance" : FT_CONTRACT[o.typeContrat] || "cdd",
+    contractType: isAlternance ? "alternance" : FT_CONTRACT[o.typeContrat] || "non-precise",
     remote: "non-precise",
     salary: o.salaire?.libelle || undefined,
     description,
@@ -406,7 +406,7 @@ export function normalizeFtJob(o: any): JobOffer | null {
     source: "France Travail",
     origin: "france-travail",
     applyUrl: String(o.origineOffre?.urlOrigine || o.contact?.urlPostulation || `https://candidat.francetravail.fr/offres/recherche/detail/${o.id}`),
-    publishedAt: isoOrUndefined(o.dateCreation) || new Date().toISOString(),
+    publishedAt: isoOrUndefined(o.dateCreation) || "",
     status: "active",
     domain: o.secteurActiviteLibelle || undefined,
     companySector: o.secteurActiviteLibelle || undefined,
@@ -498,7 +498,7 @@ export function stripHtml(v: any): string {
 }
 
 /** Déduit le type de contrat du titre / texte quand la source ne le donne pas clairement. */
-export function inferContract(text: string, fallback: ContractType = "cdi", title = ""): ContractType {
+export function inferContract(text: string, fallback: ContractType = "non-precise", title = ""): ContractType {
   // Le contrat annoncé dans l'intitulé prime sur le texte (« … (CDI) » publié par Free-Work, etc.)
   if (title) {
     const fromTitle = inferContract(title, "__none__" as ContractType);
@@ -560,13 +560,14 @@ export async function softTimeout<T>(p: Promise<T>, ms: number, onLate: () => vo
 // JSearch (Google for Jobs : LinkedIn, Indeed, Welcome to the Jungle, Glassdoor…)
 // https://www.openwebninja.com/api/jsearch — clé JSEARCH_API_KEY (RapidAPI par défaut)
 // ---------------------------------------------------------------------------
-const JSEARCH_TYPES: Record<string, ContractType> = { FULLTIME: "cdi", PARTTIME: "cdd", CONTRACTOR: "freelance", TEMPORARY: "cdd", INTERN: "stage" };
+// « Temps plein / partiel » ne dit rien du contrat (CDI ou CDD) : non précisé plutôt que supposé
+const JSEARCH_TYPES: Record<string, ContractType> = { CONTRACTOR: "freelance", TEMPORARY: "cdd", INTERN: "stage" };
 
 export function normalizeJSearchJob(j: any): JobOffer | null {
   if (!j?.job_title) return null;
   const description = stripHtml(j.job_description);
   const title = String(j.job_title);
-  const typeFallback = JSEARCH_TYPES[String(j.job_employment_type || "").toUpperCase()] || "cdi";
+  const typeFallback = JSEARCH_TYPES[String(j.job_employment_type || "").toUpperCase()] || "non-precise";
   const location = [j.job_city, j.job_state].filter(Boolean).join(", ") || String(j.job_location || j.job_country || "");
   const options = (Array.isArray(j.apply_options) ? j.apply_options : [])
     .filter((o: any) => o?.apply_link && o?.publisher)
@@ -590,7 +591,7 @@ export function normalizeJSearchJob(j: any): JobOffer | null {
     origin: "jsearch",
     applyUrl: String(j.job_apply_link || options[0]?.url || ""),
     applyOptions: options.length ? options : undefined,
-    publishedAt: isoOrUndefined(j.job_posted_at_datetime_utc) || new Date().toISOString(),
+    publishedAt: isoOrUndefined(j.job_posted_at_datetime_utc) || "",
     status: "active"
   };
 }
@@ -632,7 +633,7 @@ export function normalizeAdzunaJob(a: any): JobOffer | null {
   if (!a?.title) return null;
   const title = stripHtml(a.title);
   const description = stripHtml(a.description);
-  const fallback: ContractType = a.contract_type === "contract" ? "cdd" : "cdi";
+  const fallback: ContractType = a.contract_type === "contract" ? "cdd" : a.contract_type === "permanent" ? "cdi" : "non-precise";
   return {
     id: `adz-${a.id}`,
     title,
@@ -649,7 +650,7 @@ export function normalizeAdzunaJob(a: any): JobOffer | null {
     source: "Adzuna",
     origin: "adzuna",
     applyUrl: String(a.redirect_url || ""),
-    publishedAt: isoOrUndefined(a.created) || new Date().toISOString(),
+    publishedAt: isoOrUndefined(a.created) || "",
     status: "active",
     domain: a.category?.label || undefined
   };
@@ -714,7 +715,7 @@ export function normalizeJoobleJob(j: any): JobOffer | null {
     title,
     company: String(j.company || "Entreprise non communiquée"),
     location: String(j.location || ""),
-    contractType: inferContract(`${typeText} ${description}`, /temps partiel|part/i.test(typeText) ? "cdd" : "cdi", title),
+    contractType: inferContract(`${typeText} ${description}`, "non-precise", title),
     remote: inferRemote(`${title} ${description}`),
     salary: j.salary ? String(j.salary) : undefined,
     description,
@@ -723,7 +724,7 @@ export function normalizeJoobleJob(j: any): JobOffer | null {
     source: site ? `${site} (via Jooble)` : "Jooble",
     origin: "jooble",
     applyUrl: String(j.link || ""),
-    publishedAt: isoOrUndefined(j.updated) || new Date().toISOString(),
+    publishedAt: isoOrUndefined(j.updated) || "",
     status: "active"
   };
 }
@@ -775,10 +776,16 @@ function sameOffer(a: JobOffer, b: JobOffer): boolean {
   if (a.origin && a.origin === b.origin) return false;
   if (a.isSpontaneous || b.isSpontaneous) return false;
   if (norm(a.title).replace(/\s*\(?[hf] ?\/ ?[hf]\)?\s*/g, "") !== norm(b.title).replace(/\s*\(?[hf] ?\/ ?[hf]\)?\s*/g, "")) return false;
+  // Contrats connus et différents (CDI / stage) : deux offres distinctes
+  if (a.contractType !== b.contractType && a.contractType !== "non-precise" && b.contractType !== "non-precise") return false;
   const ca = norm(a.company), cb = norm(b.company);
-  if (!ca.startsWith("entreprise non") && !cb.startsWith("entreprise non") && ca !== cb && !ca.includes(cb) && !cb.includes(ca)) return false;
+  // Employeur inconnu d'un côté : impossible d'affirmer que c'est la même offre
+  if (!ca || !cb || ca.startsWith("entreprise non") || cb.startsWith("entreprise non")) return false;
+  // Même employeur : identique, ou l'un contient l'autre (« Mistral » / « Mistral Numérique ») s'il est assez long
+  const sameCompany = ca === cb || (Math.min(ca.length, cb.length) >= 5 && (ca.includes(cb) || cb.includes(ca)));
+  if (!sameCompany) return false;
   const ta = locationTokens(a.location), tb = locationTokens(b.location);
-  if (!ta.size || !tb.size) return true;
+  if (!ta.size || !tb.size) return ca === cb;
   for (const t of ta) if (tb.has(t)) return true;
   return false;
 }
@@ -802,6 +809,8 @@ export function mergeDuplicates(jobs: JobOffer[]): JobOffer[] {
     existing.companySize ||= job.companySize;
     existing.companySector ||= job.companySector;
     if (existing.remote === "non-precise" && job.remote !== "non-precise") existing.remote = job.remote;
+    if (existing.contractType === "non-precise" && job.contractType !== "non-precise") existing.contractType = job.contractType;
+    existing.publishedAt ||= job.publishedAt;
     existing.skillsRequired = Array.from(new Set([...existing.skillsRequired, ...job.skillsRequired])).slice(0, 15);
     const also = existing.alsoOn || [];
     if (job.applyUrl && !also.some((x) => x.url === job.applyUrl) && job.applyUrl !== existing.applyUrl) also.push({ source: job.source, url: job.applyUrl });

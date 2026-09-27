@@ -185,7 +185,8 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
       remote,
       onlyActive: true
     })
-      .filter(j => !maxAge || (ageInDays(j.publishedAt) ?? 0) <= maxAge)
+      // Date inconnue : exclue d'un filtre de fraîcheur (jamais considérée comme récente)
+      .filter(j => !maxAge || (ageInDays(j.publishedAt) ?? Infinity) <= maxAge)
       .filter(j => source === 'toutes' || (j.origin === 'demo' ? 'Démo' : sourceShortName(j.source)) === source)
       .filter(j => kind === 'toutes' || (kind === 'spontanees' ? !!j.isSpontaneous : !j.isSpontaneous))
       .map(job => ({ job, match: assessFit(userProfile, job) as JobFit }))

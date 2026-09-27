@@ -1226,7 +1226,7 @@ export default function App() {
       skillsRequired: app.skillsRequired || app.matchedKeywords || [],
       source: 'Candidature enregistrée',
       applyUrl: app.jobUrl,
-      publishedAt: app.createdAt
+      publishedAt: ''
     };
     setSelectedAppForLatex(app);
     setSelectedJobForLatex(matchedJob);

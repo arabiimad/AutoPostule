@@ -1,6 +1,7 @@
 export type CvTemplate = 'article' | 'photo' | 'moderncv' | 'compact';
 
-export type ContractType = 'stage' | 'alternance' | 'cdi' | 'cdd' | 'freelance';
+/** « non-precise » : la source n'indique pas le contrat (jamais supposé). */
+export type ContractType = 'stage' | 'alternance' | 'cdi' | 'cdd' | 'freelance' | 'non-precise';
 
 export interface Experience {
   id: string;

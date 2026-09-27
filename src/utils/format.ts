@@ -5,7 +5,8 @@ export const CONTRACT_LABELS: Record<ContractType, string> = {
   cdd: 'CDD',
   alternance: 'Alternance',
   stage: 'Stage',
-  freelance: 'Freelance'
+  freelance: 'Freelance',
+  'non-precise': 'Contrat non précisé'
 };
 
 export const REMOTE_LABELS: Record<JobOffer['remote'], string> = {

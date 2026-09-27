@@ -56,7 +56,7 @@ export function qualifyOffer(policy: AutomationPolicy, profile: any, offer: any,
   const kw = policy.excludedKeywords.find((k) => k && text.includes(norm(k)));
   if (kw) return no(`Mot exclu : « ${kw} ».`);
   if (policy.contracts.length && !policy.contracts.includes(offer?.contractType)) {
-    return no(offer?.contractType ? `Contrat « ${offer.contractType} » hors de vos critères.` : "Type de contrat non précisé.");
+    return no(offer?.contractType && offer.contractType !== "non-precise" ? `Contrat « ${offer.contractType} » hors de vos critères.` : "Type de contrat non précisé.");
   }
   if (policy.remote.length && !policy.remote.includes(offer?.remote)) return no("Télétravail hors de vos critères.");
   if (policy.locations.length && offer?.remote !== "total") {
