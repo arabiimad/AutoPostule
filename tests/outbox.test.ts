@@ -87,3 +87,16 @@ test('état observable : en attente puis enregistré', async () => {
   await box.flush();
   assert.deepEqual(states, ['saved', 'pending', 'pending', 'saved']);
 });
+
+test('file vide au démarrage : les modifications suivantes partent quand même (pas de blocage « en cours »)', async () => {
+  const f = fakeApi();
+  const box = new Outbox('u1', f.api, memoryStorage());
+  await box.flush(); // premier envoi à la connexion, rien en file
+  await box.enqueue({ kind: 'saveApp', id: 'a1', app: { id: 'a1' } });
+  assert.deepEqual(f.calls, ['save:a1']);
+  assert.equal(box.state, 'saved');
+  box.flush(); // appel sans attente, puis nouvelle modification
+  await box.enqueue({ kind: 'saveApp', id: 'a2', app: { id: 'a2' } });
+  await box.flush();
+  assert.deepEqual(f.calls, ['save:a1', 'save:a2']);
+});

@@ -70,6 +70,18 @@ export function onAuthChange(cb: (user: AppUser | null) => void): () => void {
   return () => data.subscription.unsubscribe();
 }
 
+/** Arrivée par le lien « mot de passe oublié » : l'utilisateur doit choisir un nouveau mot de passe. */
+export function onPasswordRecovery(cb: () => void): () => void {
+  if (!cloudEnabled) return () => {};
+  const { data } = sb().auth.onAuthStateChange((event) => { if (event === 'PASSWORD_RECOVERY') cb(); });
+  return () => data.subscription.unsubscribe();
+}
+
+export async function updatePassword(password: string): Promise<void> {
+  const { error } = await sb().auth.updateUser({ password });
+  if (error) throw error;
+}
+
 export async function getAccessToken(): Promise<string | null> {
   if (!cloudEnabled) return null;
   const { data } = await sb().auth.getSession();

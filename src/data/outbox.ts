@@ -100,7 +100,10 @@ export class Outbox {
   /** Envoie les modifications en file, dans l'ordre. Sans effet si un envoi est déjà en cours. */
   flush(): Promise<void> {
     if (this.running) return this.running;
-    this.running = (async () => {
+    const run: Promise<void> = (async (): Promise<void> => {
+      // Démarrage différé : sinon, file vide, la fin (running = null) s'exécuterait avant l'affectation
+      // ci-dessous et l'envoi resterait marqué « en cours » pour toujours.
+      await Promise.resolve();
       try {
         while (this.queue.length) {
           const entry = this.queue[0];
@@ -130,10 +133,11 @@ export class Outbox {
         }
       } finally {
         this.inFlight = null;
-        this.running = null;
+        if (this.running === run!) this.running = null;
       }
     })();
-    return this.running;
+    this.running = run;
+    return run;
   }
 
   private async apply(op: Op) {

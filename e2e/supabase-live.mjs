@@ -45,8 +45,9 @@ check('comptes de test créés (API admin)', users.every((u) => u.id), JSON.stri
 
 const BASE = `http://localhost:${APP_PORT}`;
 const mock = await startMockSources(MOCK_PORT);
-const server = spawn(process.execPath, ['build/server/server.cjs'], {
-  cwd: root,
+// E2E_APP_CWD : dossier contenant dist/ construit pour ces comptes (pile Supabase locale : e2e/local-supabase.mjs)
+const server = spawn(process.execPath, [path.join(root, 'build/server/server.cjs')], {
+  cwd: process.env.E2E_APP_CWD || root,
   env: { ...e2eServerEnv(), AUTH_MODE: 'required', SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY },
   stdio: ['ignore', 'pipe', 'pipe']
 });
@@ -64,6 +65,8 @@ try {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  if (process.env.E2E_DEBUG) page.on('response', async (r) => { if (r.status() >= 400) console.log('   [http]', r.status(), r.request().method(), r.url().slice(0, 120), (await r.text().catch(() => '')).slice(0, 200)); });
+  if (process.env.E2E_DEBUG) { page.on('request', (r) => { if (/rest\/v1/.test(r.url())) console.log('   [req]', r.method(), r.url().slice(0, 140)); }); page.on('console', (m) => console.log('   [console]', m.type(), m.text().slice(0, 200))); }
   let wsBlocked = false;
   page.on('websocket', (ws) => ws.on('socketerror', () => { wsBlocked = true; }));
   await page.goto(BASE);

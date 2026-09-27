@@ -12,6 +12,7 @@ import { KanbanCrmView } from './components/KanbanCrmView';
 import { InterviewCockpitModal } from './components/InterviewCockpitModal';
 import { MasterProfileView } from './components/MasterProfileView';
 import { AuthModal } from './components/AuthModal';
+import { NewPasswordModal } from './components/NewPasswordModal';
 import { PricingView } from './components/PricingView';
 import { OfferMatchView } from './components/OfferMatchView';
 import { UpgradeModal } from './components/UpgradeModal';
@@ -208,6 +209,9 @@ export default function App() {
   const outboxRef = useRef<Outbox | null>(null);
   const savedProfileRef = useRef<UserProfile | null>(null);
   const [syncState, setSyncState] = useState<SyncState>('saved');
+  // Lien « mot de passe oublié » : choix du nouveau mot de passe
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  useEffect(() => cloud.onPasswordRecovery(() => setRecoveryOpen(true)), []);
   const jobsMetaRef = useRef<JobsMeta>(jobsMeta);
   jobsMetaRef.current = jobsMeta;
   const loadingMoreRef = useRef(false);
@@ -1618,6 +1622,13 @@ export default function App() {
       )}
 
       {/* FLOATING TOAST NOTIFICATION */}
+      {recoveryOpen && (
+        <NewPasswordModal onDone={(ok) => {
+          setRecoveryOpen(false);
+          if (ok) showToast('Mot de passe modifié', 'Utilisez-le lors de vos prochaines connexions.');
+        }} />
+      )}
+
       {/* État de l'enregistrement en ligne (seulement quand ce n'est pas « tout est enregistré ») */}
       {syncState !== 'saved' && (
         <div role="status" aria-live="polite" className={`fixed z-[55] bottom-20 lg:bottom-6 left-4 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm ${syncState === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>

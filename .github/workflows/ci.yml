@@ -9,7 +9,7 @@ jobs:
   verifier:
     name: Types, tests, build et parcours navigateur
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     # PostgreSQL : migrations Supabase et file de tâches de l'auto-candidature testées sur une vraie base
     services:
       postgres:
@@ -56,3 +56,6 @@ jobs:
 
       - name: Candidature automatique dans le navigateur (interface + worker réels)
         run: npm run test:e2e:automation
+
+      - name: Comptes réels (GoTrue + PostgREST en conteneurs, e-mails capturés, RLS)
+        run: npm run test:e2e:accounts
