@@ -28,11 +28,28 @@ async function upsertSubscription(row: Record<string, any>) {
   if (row.user_id) forgetPlan(row.user_id);
 }
 
-/** Abonnement Stripe → ligne `subscriptions` (le compte est retrouvé via les métadonnées). */
-async function syncSubscription(sub: any, fallbackUid?: string) {
+const ACTIVE = ["active", "trialing", "past_due"];
+
+/**
+ * Abonnement Stripe → ligne `subscriptions` (le compte est retrouvé via les métadonnées).
+ * L'état est toujours relu chez Stripe (source de vérité) : l'ordre d'arrivée des événements n'a pas d'importance.
+ */
+export async function syncSubscription(sub: any, fallbackUid?: string) {
   const uid = sub?.metadata?.uid || fallbackUid;
   if (!uid) return logEvent("warn", "stripe_subscription_without_uid", { id: sub?.id });
-  const plan: PlanId = ["active", "trialing", "past_due"].includes(sub.status) ? "premium" : "free";
+  const current = await subscriptionRow(uid).catch(() => null);
+  if (current?.stripe_subscription_id && current.stripe_subscription_id !== sub.id && ACTIVE.includes(current.status)) {
+    if (ACTIVE.includes(sub.status)) {
+      // Second abonnement actif pour le même compte (double paiement) : le nouveau est annulé immédiatement
+      await stripeApi(`/subscriptions/${sub.id}`, undefined, "DELETE");
+      logEvent("warn", "stripe_duplicate_subscription_cancelled", { kept: current.stripe_subscription_id, cancelled: sub.id });
+      return;
+    }
+    // Évènement d'un ancien abonnement (résilié) : ne rétrograde pas le compte abonné
+    return logEvent("info", "stripe_stale_subscription_ignored", { id: sub.id, status: sub.status });
+  }
+  // « unpaid », « canceled », « incomplete_expired » : retour au forfait gratuit ; « past_due » : délai de paiement
+  const plan: PlanId = ACTIVE.includes(sub.status) ? "premium" : "free";
   await upsertSubscription({
     user_id: uid,
     plan,
@@ -42,6 +59,23 @@ async function syncSubscription(sub: any, fallbackUid?: string) {
     current_period_end: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null
   });
   logEvent("info", "subscription_synced", { plan, status: sub.status });
+}
+
+/** Évènement déjà traité ? (Stripe renvoie les webhooks en cas de doute : chaque évènement ne compte qu'une fois) */
+async function eventProcessed(id: string): Promise<boolean> {
+  const admin = supabaseAdmin();
+  if (!admin || !id) return false;
+  const rows = await admin(`/rest/v1/stripe_events?id=eq.${encodeURIComponent(id)}&select=id`);
+  return !!rows?.length;
+}
+async function markEventProcessed(id: string, type: string) {
+  const admin = supabaseAdmin();
+  if (!admin || !id) return;
+  await admin(`/rest/v1/stripe_events?on_conflict=id`, {
+    method: "POST",
+    headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+    body: JSON.stringify({ id, type })
+  });
 }
 
 export function registerAccountRoutes(app: Express) {
@@ -58,13 +92,24 @@ export function registerAccountRoutes(app: Express) {
       return res.status(400).json({ error: "JSON invalide" });
     }
     try {
+      if (await eventProcessed(event.id)) return res.json({ received: true, duplicate: true });
       const obj = event.data?.object;
+      let subscriptionId: string | null = null;
+      let fallbackUid: string | undefined;
       if (event.type === "checkout.session.completed" && obj?.mode === "subscription" && obj.subscription) {
-        const sub = await stripeApi(`/subscriptions/${obj.subscription}`);
-        await syncSubscription(sub, obj.client_reference_id || obj.metadata?.uid);
-      } else if (["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"].includes(event.type)) {
-        await syncSubscription(obj);
+        subscriptionId = typeof obj.subscription === "string" ? obj.subscription : obj.subscription.id;
+        fallbackUid = obj.client_reference_id || obj.metadata?.uid;
+      } else if (["customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "customer.subscription.paused", "customer.subscription.resumed"].includes(event.type)) {
+        subscriptionId = obj?.id;
+      } else if (["invoice.payment_failed", "invoice.paid"].includes(event.type) && obj?.subscription) {
+        subscriptionId = typeof obj.subscription === "string" ? obj.subscription : obj.subscription.id;
       }
+      if (subscriptionId) {
+        // État actuel relu chez Stripe (et non celui, peut-être ancien, contenu dans l'évènement)
+        const sub = await stripeApi(`/subscriptions/${subscriptionId}`);
+        await syncSubscription(sub, fallbackUid);
+      }
+      await markEventProcessed(event.id, event.type);
       return res.json({ received: true });
     } catch (e: any) {
       logEvent("error", "stripe_webhook_failed", { type: event?.type, message: String(e?.message || e).slice(0, 300) });
@@ -99,7 +144,12 @@ export function registerAccountApiRoutes(app: Express) {
     if (!stripeEnabled()) return res.status(501).json({ success: false, error: "Le paiement n'est pas encore activé." });
     try {
       const sub = await subscriptionRow(req.uid).catch(() => null);
+      if (sub?.stripe_subscription_id && ACTIVE.includes(sub.status)) {
+        return res.status(409).json({ success: false, error: "Vous avez déjà un abonnement Premium : gérez-le depuis « Gérer mon abonnement »." });
+      }
       const base = appUrl(req);
+      // Clé d'unicité par compte et par tranche de 10 minutes : un double clic renvoie la même session
+      const idempotencyKey = `checkout-${req.uid}-${Math.floor(Date.now() / 600_000)}`;
       const session = await stripeApi("/checkout/sessions", {
         mode: "subscription",
         line_items: [{ price: process.env.STRIPE_PRICE_PREMIUM, quantity: 1 }],
@@ -111,7 +161,7 @@ export function registerAccountApiRoutes(app: Express) {
         locale: "fr",
         success_url: `${base}/?onglet=tarifs&paiement=ok`,
         cancel_url: `${base}/?onglet=tarifs&paiement=annule`
-      });
+      }, "POST", { idempotencyKey });
       return res.json({ success: true, url: session.url });
     } catch (e: any) {
       logEvent("error", "checkout_failed", { message: String(e?.message || e).slice(0, 300) });

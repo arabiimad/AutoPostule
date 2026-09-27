@@ -20,12 +20,22 @@ export function formEncode(obj: Record<string, any>, prefix = ""): string {
   return parts.filter(Boolean).join("&");
 }
 
-export async function stripeApi(path: string, params?: Record<string, any>, method: "GET" | "POST" | "DELETE" = params ? "POST" : "GET") {
+export async function stripeApi(
+  path: string,
+  params?: Record<string, any>,
+  method: "GET" | "POST" | "DELETE" = params ? "POST" : "GET",
+  opts: { idempotencyKey?: string } = {}
+) {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error("STRIPE_NOT_CONFIGURED");
-  const r = await fetch(`https://api.stripe.com/v1${path}`, {
+  const base = (process.env.STRIPE_API_URL || "https://api.stripe.com").replace(/\/$/, "");
+  const r = await fetch(`${base}/v1${path}`, {
     method,
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/x-www-form-urlencoded", "Stripe-Version": "2024-06-20" },
+    headers: {
+      Authorization: `Bearer ${key}`, "Content-Type": "application/x-www-form-urlencoded", "Stripe-Version": "2024-06-20",
+      // Même clé = même résultat : un double clic ne crée pas deux sessions de paiement
+      ...(opts.idempotencyKey ? { "Idempotency-Key": opts.idempotencyKey } : {})
+    },
     body: params && method !== "GET" ? formEncode(params) : undefined,
     signal: AbortSignal.timeout(15000)
   });
