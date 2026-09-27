@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { UserProfile, Experience, Education, ContractType } from '../types';
 import { apiFetch } from '../utils/api';
+import { buildImportedProfile, importWarnings, type ImportMode, type ImportWarning } from '../utils/cvImport';
 import { Button, Modal, cx } from './ui';
 
 /** Type MIME d'un document Word (.docx) : le serveur en extrait le texte. */
@@ -49,6 +50,19 @@ export const CvUploadModal: React.FC<CvUploadModalProps> = ({
   const [newSkill, setNewSkill] = useState<string>('');
   const [newLanguage, setNewLanguage] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [parsedCv, setParsedCv] = useState<any>(null);
+  const [importMode, setImportMode] = useState<ImportMode>('replace');
+  const [warnings, setWarnings] = useState<ImportWarning[]>([]);
+  const [kept, setKept] = useState<string[]>([]);
+  const [hasPreviousProfile, setHasPreviousProfile] = useState(false);
+
+  const switchMode = (mode: ImportMode) => {
+    if (!parsedCv || mode === importMode) return;
+    const r = buildImportedProfile(currentProfile, parsedCv, mode);
+    setImportMode(mode);
+    setExtractedProfile(r.profile);
+    setKept(r.keptFromPrevious);
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uid = React.useId();
@@ -168,59 +182,15 @@ export const CvUploadModal: React.FC<CvUploadModalProps> = ({
       }
 
       const p = data.profile;
-
-      // Merge cleanly into user profile format, preserving existing auth metadata
-      const preparedProfile: UserProfile = {
-        ...currentProfile,
-        fullName: p.fullName?.trim() || currentProfile.fullName || '',
-        email: p.email?.trim() || currentProfile.email || '',
-        phone: p.phone?.trim() || currentProfile.phone || '',
-        title: p.title?.trim() || currentProfile.title || '',
-        location: p.location?.trim() || currentProfile.location || '',
-        linkedinUrl: p.linkedinUrl?.trim() || currentProfile.linkedinUrl || '',
-        githubUrl: p.githubUrl?.trim() || currentProfile.githubUrl || '',
-        portfolioUrl: p.portfolioUrl?.trim() || currentProfile.portfolioUrl || '',
-        summary: p.summary?.trim() || currentProfile.summary || '',
-        skills: Array.isArray(p.skills) && p.skills.length > 0 ? p.skills : currentProfile.skills,
-        experiences: Array.isArray(p.experiences) && p.experiences.length > 0 
-          ? p.experiences.map((exp: any, idx: number) => ({
-              id: exp.id || `exp-${Date.now()}-${idx}`,
-              title: exp.title || '',
-              company: exp.company || '',
-              location: exp.location || '',
-              startDate: exp.startDate || '',
-              endDate: exp.endDate || '',
-              current: !!exp.current,
-              bullets: Array.isArray(exp.bullets) ? exp.bullets : [],
-              technologies: Array.isArray(exp.technologies) ? exp.technologies : []
-            }))
-          : currentProfile.experiences,
-        education: Array.isArray(p.education) && p.education.length > 0
-          ? p.education.map((edu: any, idx: number) => ({
-              id: edu.id || `edu-${Date.now()}-${idx}`,
-              degree: edu.degree || '',
-              institution: edu.institution || '',
-              year: edu.year || '',
-              details: edu.details || ''
-            }))
-          : currentProfile.education,
-        projects: Array.isArray(p.projects) && p.projects.length > 0
-          ? p.projects.map((proj: any, idx: number) => ({
-              id: proj.id || `proj-${Date.now()}-${idx}`,
-              name: proj.name || 'Projet',
-              description: proj.description || '',
-              technologies: Array.isArray(proj.technologies) ? proj.technologies : [],
-              link: proj.link || ''
-            }))
-          : currentProfile.projects,
-        languages: Array.isArray(p.languages) && p.languages.length > 0 
-          ? p.languages 
-          : currentProfile.languages,
-        targetRoles: Array.isArray(p.targetRoles) && p.targetRoles.length > 0
-          ? p.targetRoles
-          : (p.title ? [p.title] : currentProfile.targetRoles)
-      };
-
+      // Profil existant : remplacé par défaut (aucun mélange silencieux) ; « compléter » reste possible
+      const hadProfile = (currentProfile.experiences?.length || 0) > 0 || (currentProfile.skills?.length || 0) > 0;
+      const mode: ImportMode = 'replace';
+      setParsedCv(p);
+      setImportMode(mode);
+      setWarnings(importWarnings(p, currentProfile));
+      setHasPreviousProfile(hadProfile);
+      const { profile: preparedProfile, keptFromPrevious } = buildImportedProfile(currentProfile, p, mode);
+      setKept(keptFromPrevious);
       setExtractedProfile(preparedProfile);
       setStep('confirm');
 
@@ -409,6 +379,11 @@ export const CvUploadModal: React.FC<CvUploadModalProps> = ({
           <RotateCcw className="h-4 w-4" aria-hidden="true" />
           Importer un autre document
         </Button>
+        {!isMandatoryOnboarding && (
+          <Button type="button" variant="ghost" onClick={onClose} className="w-full sm:w-auto">
+            Annuler (rien n’est enregistré)
+          </Button>
+        )}
         <Button type="button" variant="primary" onClick={handleConfirmAndSave} disabled={isSaving} className="w-full sm:w-auto">
           {isSaving ? (
             <>
@@ -437,7 +412,7 @@ export const CvUploadModal: React.FC<CvUploadModalProps> = ({
       title={title}
       subtitle={subtitle}
       size={step === 'confirm' ? 'xl' : 'lg'}
-      dismissible={!isMandatoryOnboarding && step !== 'confirm'}
+      dismissible={!isMandatoryOnboarding}
       footer={footer}
     >
       <div className="space-y-5 px-5 py-5 sm:px-6">
@@ -556,6 +531,30 @@ export const CvUploadModal: React.FC<CvUploadModalProps> = ({
         {/* ÉTAPE 2 : VÉRIFICATION */}
         {step === 'confirm' && (
           <>
+            {hasPreviousProfile && (
+              <fieldset className="space-y-2 rounded-2xl border border-brand-200 bg-brand-50 p-4">
+                <legend className="px-1 text-sm font-semibold text-slate-900">Votre profil contient déjà des informations</legend>
+                <label className="flex items-start gap-2 text-sm text-slate-700">
+                  <input type="radio" name="import-mode" className="mt-1" checked={importMode === 'replace'} onChange={() => switchMode('replace')} />
+                  <span><strong>Remplacer mon profil par ce CV</strong> (recommandé) : seules les informations de ce CV sont gardées ; vos réglages de recherche restent.</span>
+                </label>
+                <label className="flex items-start gap-2 text-sm text-slate-700">
+                  <input type="radio" name="import-mode" className="mt-1" checked={importMode === 'complete'} onChange={() => switchMode('complete')} />
+                  <span><strong>Compléter mon profil actuel</strong> : ce que le CV ne contient pas est repris de votre profil.</span>
+                </label>
+                {importMode === 'complete' && kept.length > 0 && (
+                  <p className="text-xs text-slate-600">Repris de votre profil actuel : {kept.join(', ')}.</p>
+                )}
+              </fieldset>
+            )}
+            {warnings.length > 0 && (
+              <div role="alert" className="space-y-1 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <p className="font-semibold">À vérifier avant d’enregistrer</p>
+                <ul className="list-disc space-y-0.5 pl-5">
+                  {warnings.map((w, i) => <li key={i} className={w.level === 'important' ? 'font-medium' : ''}>{w.message}</li>)}
+                </ul>
+              </div>
+            )}
             {analysisError && (
               <div id={errorId} role="alert" className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" aria-hidden="true" />
