@@ -13,3 +13,7 @@ $$;
 grant usage on schema auth, public to anon, authenticated, service_role;
 grant execute on function auth.uid() to anon, authenticated, service_role;
 create publication supabase_realtime;
+-- Droits par défaut de Supabase : les rôles API ont accès aux tables publiques, la sécurité repose sur RLS
+alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+alter default privileges in schema public grant execute on functions to anon, authenticated, service_role;

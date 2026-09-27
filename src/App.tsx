@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as cloud from './data/cloud';
 import { accountsRequired, isCloudUser, type AppUser as User } from './data/cloud';
+import { Outbox, overlayPending, changedKeys, type SyncState } from './data/outbox';
 import { AccountGate } from './components/AccountGate';
 import { Header } from './components/Header';
 import { JobSearchView } from './components/jobs/JobSearchView';
@@ -203,6 +204,10 @@ export default function App() {
   currentUserRef.current = currentUser;
   const profileRef = useRef<UserProfile>(userProfile);
   profileRef.current = userProfile;
+  // File d'enregistrement en ligne (comptes) : rien n'est perdu hors connexion, aucun écrasement entre appareils
+  const outboxRef = useRef<Outbox | null>(null);
+  const savedProfileRef = useRef<UserProfile | null>(null);
+  const [syncState, setSyncState] = useState<SyncState>('saved');
   const jobsMetaRef = useRef<JobsMeta>(jobsMeta);
   jobsMetaRef.current = jobsMeta;
   const loadingMoreRef = useRef(false);
@@ -323,6 +328,16 @@ export default function App() {
     }
   };
 
+  // Enregistrements en attente : nouvel essai au retour du réseau, au retour sur l'onglet et toutes les 30 s
+  useEffect(() => {
+    const retry = () => { outboxRef.current?.flush(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') retry(); };
+    window.addEventListener('online', retry);
+    document.addEventListener('visibilitychange', onVisible);
+    const t = setInterval(() => { if (outboxRef.current?.size) retry(); }, 30_000);
+    return () => { window.removeEventListener('online', retry); document.removeEventListener('visibilitychange', onVisible); clearInterval(t); };
+  }, []);
+
   // Précédent / Suivant du navigateur : onglet et recherche restaurés depuis l'URL
   useEffect(() => {
     const onPop = () => {
@@ -378,9 +393,27 @@ export default function App() {
 
       setCurrentUser(user);
 
+      // File d'enregistrement de ce compte (reprend les modifications restées en attente sur cet appareil)
+      const box = new Outbox(user.uid, {
+        saveApplication: cloud.saveApplication,
+        patchApplication: cloud.patchApplicationRemote,
+        deleteApplication: cloud.deleteApplication,
+        saveProfile: cloud.saveProfileVersioned
+      }, typeof localStorage !== 'undefined' ? localStorage : null);
+      box.onProfileMerged = (merged) => {
+        const p = withProfileDefaults(merged);
+        savedProfileRef.current = p;
+        setUserProfile(p);
+        showToast('Profil synchronisé', 'Votre profil avait été modifié sur un autre appareil : les deux versions ont été réunies.');
+      };
+      outboxRef.current = box;
+      box.subscribe((st) => setSyncState(st));
+      box.flush();
+
       // App est le SEUL à créer le profil en ligne
       try {
-        const stored = await cloud.loadProfile(user.uid);
+        const { profile: stored, version } = await cloud.loadProfileVersioned(user.uid);
+        box.profileVersion = version;
         let profile: UserProfile;
         if (stored) {
           profile = withProfileDefaults(stored);
@@ -392,7 +425,9 @@ export default function App() {
             email: user.email || ''
           });
           await cloud.saveProfile(user.uid, profile);
+          box.profileVersion = 1;
         }
+        savedProfileRef.current = profile;
         setUserProfile(profile);
         // Profil vide : import du CV proposé, sauf sur un outil public (la page doit rester utilisable)
         if ((!profile.fullName || profile.skills.length === 0 || profile.experiences.length === 0) && !isPublicTool(readTab())) {
@@ -404,7 +439,7 @@ export default function App() {
         showToast('Profil non chargé', 'Impossible de lire votre profil en ligne. Vérifiez votre connexion.', true);
       }
 
-      unsubApps = cloud.subscribeApplications(user.uid, setApplications, (err) => {
+      unsubApps = cloud.subscribeApplications(user.uid, (apps) => setApplications(overlayPending(apps, outboxRef.current)), (err) => {
         console.error('Applications sync error:', err);
       });
     });
@@ -419,6 +454,10 @@ export default function App() {
     try {
       localStorage.removeItem(LOCAL_USER_KEY);
     } catch {}
+    // Dernier envoi des modifications en attente (sinon elles restent sur cet appareil et partiront à la prochaine connexion)
+    await outboxRef.current?.flush().catch(() => {});
+    outboxRef.current = null;
+    setSyncState('saved');
     try {
       if (isCloudUser(currentUserRef.current)) await cloud.signOut();
     } catch (e) {
@@ -628,8 +667,16 @@ export default function App() {
     setIsSavingProfile(true);
     setUserProfile(toSave);
     try {
-      if (isCloudUser(user)) {
-        await cloud.saveProfile(user.uid, toSave);
+      const box = outboxRef.current;
+      if (isCloudUser(user) && box) {
+        const changed = changedKeys(savedProfileRef.current, toSave);
+        savedProfileRef.current = toSave;
+        await box.enqueue({ kind: 'saveProfile', profile: toSave, baseVersion: null, changed });
+        if (!options.silent) {
+          if (box.state === 'saved') showToast('Profil enregistré', 'Votre profil est à jour.');
+          else showToast('Profil enregistré sur cet appareil', 'Il sera envoyé en ligne automatiquement dès que la connexion reviendra.');
+        }
+        return;
       } else if (!accountsRequired) {
         writeJson(profileKey(storageUid(user)), toSave);
       }
@@ -656,14 +703,7 @@ export default function App() {
       saveApplicationsLocally(user, updated);
       return updated;
     });
-    if (isCloudUser(user)) {
-      try {
-        await cloud.saveApplication(user.uid, app);
-      } catch (err) {
-        console.error('App save error:', err);
-        showToast('Sauvegarde en ligne échouée', 'Le dossier est visible ici mais n\'a pas été enregistré en ligne.', true);
-      }
-    }
+    if (isCloudUser(user)) await outboxRef.current?.enqueue({ kind: 'saveApp', id: app.id, app });
   };
 
   const patchApplication = async (appId: string, patch: Partial<Application>) => {
@@ -674,14 +714,8 @@ export default function App() {
       saveApplicationsLocally(user, updated);
       return updated;
     });
-    if (isCloudUser(user)) {
-      try {
-        if (current) await cloud.saveApplication(user.uid, { ...current, ...patch });
-      } catch (err) {
-        console.error('App update error:', err);
-        showToast('Mise à jour en ligne échouée', 'Réessayez dans un instant.', true);
-      }
-    }
+    // Seuls les champs modifiés partent : ce qu'un autre appareil ou la candidature automatique a écrit est préservé
+    if (isCloudUser(user) && current) await outboxRef.current?.enqueue({ kind: 'patchApp', id: appId, patch });
   };
 
   const handleUpdateAppStatus = async (appId: string, newStatus: ApplicationStatus) => {
@@ -1094,14 +1128,7 @@ export default function App() {
       saveApplicationsLocally(user, updated);
       return updated;
     });
-    if (isCloudUser(user)) {
-      try {
-        await cloud.deleteApplication(user.uid, appId);
-      } catch (err) {
-        console.error('App delete error:', err);
-        showToast('Suppression en ligne échouée', 'Réessayez dans un instant.', true);
-      }
-    }
+    if (isCloudUser(user)) await outboxRef.current?.enqueue({ kind: 'deleteApp', id: appId });
   };
 
   /** Sauvegarder / retirer une offre (colonne « Sauvegardées » du suivi). */
@@ -1164,11 +1191,7 @@ export default function App() {
       return merged;
     });
     if (isCloudUser(user)) {
-      try {
-        await cloud.saveApplications(user.uid, owned);
-      } catch {
-        showToast('Import partiel', 'Les dossiers importés n’ont pas pu être enregistrés en ligne. Réessayez.', true);
-      }
+      for (const a of owned) await outboxRef.current?.enqueue({ kind: 'saveApp', id: a.id, app: a });
     }
     showToast('Sauvegarde importée', `${owned.length} candidature(s) restaurée(s).`);
   };
@@ -1595,6 +1618,24 @@ export default function App() {
       )}
 
       {/* FLOATING TOAST NOTIFICATION */}
+      {/* État de l'enregistrement en ligne (seulement quand ce n'est pas « tout est enregistré ») */}
+      {syncState !== 'saved' && (
+        <div role="status" aria-live="polite" className={`fixed z-[55] bottom-20 lg:bottom-6 left-4 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-sm ${syncState === 'error' ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+          {syncState === 'error' ? (
+            <>
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              Une modification n’a pas été enregistrée.
+              <button type="button" className="underline" onClick={() => window.location.reload()}>Recharger</button>
+            </>
+          ) : (
+            <>
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500" aria-hidden="true" />
+              {typeof navigator !== 'undefined' && navigator.onLine === false ? 'Hors connexion : modifications gardées, envoi automatique au retour' : 'Enregistrement en cours…'}
+            </>
+          )}
+        </div>
+      )}
+
       {toastMessage && (
         <div role="status" aria-live="polite" className="fixed z-[60] bottom-20 lg:bottom-6 left-4 right-4 sm:left-auto sm:right-6 sm:w-[380px] bg-white border border-slate-200 px-4 py-3.5 rounded-2xl shadow-xl flex items-start gap-3">
           {toastMessage.error

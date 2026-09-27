@@ -138,6 +138,28 @@ export async function loadProfile(uid: string): Promise<UserProfile | null> {
 /** JSONB n'accepte pas `undefined` : on le retire (évite l'échec de toute la sauvegarde). */
 const clean = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
+/** Profil et sa version (base de l'enregistrement conditionnel). */
+export async function loadProfileVersioned(uid: string): Promise<{ profile: UserProfile | null; version: number | null }> {
+  const { data, error } = await sb().from('profiles').select('data, version').eq('id', uid).maybeSingle();
+  if (error) throw error;
+  return { profile: (data?.data as UserProfile) || null, version: data?.version ?? null };
+}
+
+/** Enregistrement conditionnel : ok=false si le profil a été modifié ailleurs depuis `expected` (renvoie la dernière version). */
+export async function saveProfileVersioned(_uid: string, profile: UserProfile, expected: number | null): Promise<{ ok: boolean; version: number; data: any }> {
+  const { data, error } = await sb().rpc('save_profile', { p_data: clean(profile), p_expected: expected });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return { ok: !!row?.ok, version: Number(row?.version), data: row?.data };
+}
+
+/** Modifie seulement les champs donnés d'un dossier (fusion côté serveur ; null retire le champ). */
+export async function patchApplicationRemote(_uid: string, id: string, patch: Partial<Application>): Promise<{ found: boolean }> {
+  const { data, error } = await sb().rpc('patch_application', { p_id: id, p_patch: JSON.parse(JSON.stringify(patch, (_k, v) => (v === undefined ? null : v))) });
+  if (error) throw error;
+  return { found: Array.isArray(data) ? data.length > 0 : !!data };
+}
+
 export async function saveProfile(uid: string, profile: UserProfile): Promise<void> {
   const { error } = await sb().from('profiles').upsert({ id: uid, data: clean(profile) });
   if (error) throw error;
