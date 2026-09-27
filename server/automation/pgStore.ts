@@ -227,6 +227,49 @@ export class PgAutomationStore implements AutomationStore {
     }
   }
 
+  /**
+   * Conservation : preuves détaillées (message, réponses, empreintes) effacées après `proofDays` jours,
+   * la ligne de tentative restant pour empêcher toute nouvelle candidature à la même offre ;
+   * évènements effacés après `proofDays` jours, tâches terminées après 30 jours.
+   */
+  async purgeOld(proofDays = 180): Promise<{ proofs: number; events: number; tasks: number }> {
+    const proofs = await this.pool.query(
+      `update public.application_attempts set proof = null, answers = '{}'::jsonb, documents = '[]'::jsonb, error = null
+        where created_at < now() - make_interval(days => $1) and (proof is not null or answers <> '{}'::jsonb or documents <> '[]'::jsonb)`,
+      [proofDays]
+    );
+    const events = await this.pool.query(`delete from public.automation_events where created_at < now() - make_interval(days => $1)`, [proofDays]);
+    const tasks = await this.pool.query(`delete from public.automation_tasks where status in ('done', 'cancelled', 'failed') and updated_at < now() - interval '30 days'`);
+    return { proofs: proofs.rowCount || 0, events: events.rowCount || 0, tasks: tasks.rowCount || 0 };
+  }
+
+  /** Indicateurs de supervision (exploitant), sans aucune donnée personnelle. */
+  async supervision() {
+    const one = async (text: string) => (await this.pool.query(text)).rows;
+    const [tasks] = await one(
+      `select count(*) filter (where status = 'queued')::int as queued,
+              count(*) filter (where status = 'running' and locked_until >= now())::int as running,
+              count(*) filter (where status = 'running' and locked_until < now())::int as stuck,
+              count(*) filter (where status = 'queued' and run_after < now() - interval '30 minutes')::int as late,
+              count(*) filter (where status = 'done' and updated_at > now() - interval '24 hours')::int as done_24h,
+              count(*) filter (where status = 'failed' and updated_at > now() - interval '24 hours')::int as failed_24h,
+              count(*) filter (where status = 'needs_user' and updated_at > now() - interval '24 hours')::int as needs_user_24h,
+              max(updated_at) filter (where status in ('done', 'failed', 'needs_user', 'uncertain', 'cancelled')) as last_finished
+         from public.automation_tasks`
+    );
+    const attempts = await one(
+      `select channel, status, count(*)::int as n from public.application_attempts
+        where created_at > now() - interval '7 days' group by channel, status order by channel, status`
+    );
+    const errors = await one(
+      `select channel, left(coalesce(error, ''), 80) as error, count(*)::int as n from public.application_attempts
+        where created_at > now() - interval '7 days' and status in ('failed', 'uncertain', 'needs_user') and error is not null
+        group by channel, left(coalesce(error, ''), 80) order by n desc limit 20`
+    );
+    const [users] = await one(`select count(*) filter (where enabled and not paused)::int as active, count(*) filter (where paused)::int as paused from public.automation_policies`);
+    return { at: new Date().toISOString(), tasks, attempts, errors, users };
+  }
+
   async close() {
     await this.pool.end();
   }

@@ -140,3 +140,24 @@ test('suivi des réponses planifié seulement si la lecture est autorisée, une 
   assert.equal(await store.scheduleReplyTracking(3), 1);
   assert.equal(await store.scheduleReplyTracking(3), 0, 'pas deux fois');
 });
+
+test('conservation : preuves détaillées effacées après 180 jours, doublon toujours empêché', { skip }, async () => {
+  const [a] = await q(`select id, offer_id from public.application_attempts where proof is not null limit 1`);
+  await q(`update public.application_attempts set created_at = now() - interval '200 days' where id = $1`, [a.id]);
+  await q(`insert into public.automation_events (user_id, type, message, created_at) values ($1, 'old', 'x', now() - interval '200 days')`, [U]);
+  const r = await store.purgeOld(180);
+  assert.ok(r.proofs >= 1 && r.events >= 1, JSON.stringify(r));
+  const [after] = await q(`select proof, answers, documents, status from public.application_attempts where id = $1`, [a.id]);
+  assert.equal(after.proof, null);
+  assert.deepEqual(after.documents, []);
+  const again = await store.reserveAttempt({ userId: U, offerId: a.offer_id, channel: 'email', destination: 'x@y.fr', profileVersion: 'v', documents: [], answers: {} });
+  assert.equal(again.reason, 'ALREADY_ATTEMPTED', 'toujours impossible de repostuler');
+});
+
+test('supervision : indicateurs agrégés, sans donnée personnelle', { skip }, async () => {
+  await q(`insert into public.automation_tasks (user_id, kind, status, locked_by, locked_until) values ($1, 'search', 'running', 'w', now() - interval '1 minute')`, [U]);
+  const s = await store.supervision();
+  assert.ok(s.tasks.stuck >= 1);
+  assert.ok(Array.isArray(s.attempts) && s.attempts.some((x: any) => x.status === 'submitted'));
+  assert.doesNotMatch(JSON.stringify(s), /karim|@gmail|recrutement@/i);
+});
