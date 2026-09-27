@@ -101,13 +101,13 @@ export const Header: React.FC<HeaderProps> = ({
     <>
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 xl:gap-6 px-4 sm:px-6 lg:px-8">
-          <button onClick={() => setCurrentTab('radar')} className="flex items-center gap-2.5 shrink-0" aria-label="AutoPostule — accueil">
+          <button onClick={() => setCurrentTab('radar')} className="flex items-center gap-2.5 shrink-0" aria-label="Kareer — accueil">
             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
               <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M4 17l5-5 4 4 7-8" /><path d="M15 8h5v5" />
               </svg>
             </span>
-            <span className="text-[17px] font-extrabold tracking-tight text-slate-900">AutoPostule</span>
+            <span className="text-[17px] font-extrabold tracking-tight text-slate-900">Kareer</span>
           </button>
 
           <nav className="hidden lg:flex items-center h-full" aria-label="Navigation principale">

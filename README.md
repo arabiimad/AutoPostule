@@ -1,4 +1,4 @@
-# AutoPostule
+# Kareer
 
 Recherche d'offres multi-sources, CV LaTeX et lettre adaptés à chaque offre, suivi des candidatures, relances et préparation aux entretiens.
 

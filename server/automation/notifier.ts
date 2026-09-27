@@ -73,7 +73,7 @@ export class Notifier {
     const waiting = (await this.store.queue.listWaiting(uid)).length;
     const link = `${this.opts.appUrl.replace(/\/$/, "")}/?onglet=assistant`;
     const message: PushMessage = urgent
-      ? { title: "Code de vérification demandé", body: "Un site demande un code : ouvrez AutoPostule pour le saisir avant qu'il expire.", link, data: { kind } }
+      ? { title: "Code de vérification demandé", body: "Un site demande un code : ouvrez Kareer pour le saisir avant qu'il expire.", link, data: { kind } }
       : {
           title: waiting > 1 ? `${waiting} candidatures attendent un tap` : "Une candidature attend un tap",
           body: "Tout est prêt : il ne reste qu'à valider depuis votre téléphone.",

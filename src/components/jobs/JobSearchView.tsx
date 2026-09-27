@@ -331,7 +331,7 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
         <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 sm:p-6" aria-labelledby="welcome-title">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h2 id="welcome-title" className="flex items-center gap-2 text-base font-semibold text-slate-900"><Sparkles className="h-4 w-4 text-brand-600" /> Bienvenue sur AutoPostule</h2>
+              <h2 id="welcome-title" className="flex items-center gap-2 text-base font-semibold text-slate-900"><Sparkles className="h-4 w-4 text-brand-600" /> Bienvenue sur Kareer</h2>
               <p className="mt-0.5 text-sm text-slate-500">Trois étapes pour postuler plus vite, sans rien inventer sur votre profil.</p>
             </div>
             <button onClick={() => { writeFlag(WELCOME_KEY); setWelcomeHidden(true); }} aria-label="Masquer les premiers pas" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>

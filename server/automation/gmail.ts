@@ -143,7 +143,7 @@ export class GoogleMail {
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data.access_token) throw new MailAuthError("Google a refusé la connexion. Réessayez.");
     if (!String(data.scope || "").includes("gmail.send")) throw new MailAuthError("Autorisation d'envoi non accordée : cochez « Envoyer des e-mails » sur l'écran de Google.");
-    if (!data.refresh_token) throw new MailAuthError("Google n'a pas fourni d'accès durable : retirez AutoPostule de votre compte Google puis reconnectez-vous.");
+    if (!data.refresh_token) throw new MailAuthError("Google n'a pas fourni d'accès durable : retirez Kareer de votre compte Google puis reconnectez-vous.");
     const email = emailFromIdToken(data.id_token);
     if (!email) throw new MailAuthError("Adresse Gmail introuvable dans la réponse de Google.");
 

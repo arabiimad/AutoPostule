@@ -428,7 +428,7 @@ const SettingsForm: React.FC<{
         ) : (
           <div className="rounded-xl border border-slate-200 p-3 text-sm text-slate-700">
             {mail?.google?.status === 'revoked' && <p className="mb-2 text-rose-700">L'accès à {mail.google.email} a été retiré : reconnectez la boîte.</p>}
-            Connectez Gmail pour que l'agent envoie les candidatures depuis votre adresse. AutoPostule peut seulement envoyer des emails : il ne lit jamais votre boîte.
+            Connectez Gmail pour que l'agent envoie les candidatures depuis votre adresse. Kareer peut seulement envoyer des emails : il ne lit jamais votre boîte.
             <div className="mt-2">
               <Button size="sm" variant="primary" disabled={!mail?.gmailAvailable || busy === 'gmail'} onClick={onConnectGmail}>Connecter Gmail</Button>
               {!mail?.gmailAvailable && <p className="mt-2 text-xs text-slate-500">Connexion Gmail pas encore activée sur ce serveur.</p>}

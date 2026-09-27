@@ -43,6 +43,7 @@ import {
 // ---------------------------------------------------------------------------
 // Stockage local : une clé PAR utilisateur (avant, toutes les sessions du navigateur partageaient les mêmes données)
 // ---------------------------------------------------------------------------
+// Clés de stockage de l'ancien nom (AutoPostule) conservées : les données déjà enregistrées restent lisibles
 const LOCAL_USER_KEY = 'autopostule_local_user';
 const appsKey = (uid: string) => `autopostule_applications_${uid}`;
 const profileKey = (uid: string) => `autopostule_user_profile_${uid}`;
