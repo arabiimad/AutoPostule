@@ -29,6 +29,7 @@
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "pdf-parse": "^2.4.5",
+    "pg": "^8.23.0",
     "playwright": "^1.55.0",
     "posthog-js": "^1.434.12",
     "react": "^19.0.1",
@@ -38,6 +39,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
