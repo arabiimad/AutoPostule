@@ -168,7 +168,11 @@ export const AgentAutomationView: React.FC<AgentAutomationViewProps> = ({
                   );
                 })}
               </div>
-              <p className="text-xs text-slate-500">Aucun type sélectionné : tous les contrats sont retenus.</p>
+              <p className="text-xs text-slate-500">
+                {(userProfile.preferredContracts || []).length
+                  ? 'Seules les offres de ces contrats sont retenues.'
+                  : 'Aucun type sélectionné : tous les contrats sont retenus.'}
+              </p>
             </div>
 
             {!hasProfile && (

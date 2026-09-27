@@ -75,3 +75,18 @@ test('poste / entreprise et diplôme / établissement séparés par un tiret lon
     ['BTS SIO', 'Lycée Mistral', '2019']
   ]);
 });
+
+test('titre : métier absent de la liste ou au féminin → ligne sous le nom, jamais le nom lui-même', () => {
+  const cases: [string, string][] = [
+    ['Camille Martin\nDéveloppeuse web\ncamille@example.com — 06 12 34 56 78 — Avignon\n\nEXPÉRIENCE\nDéveloppeuse web — Studio X — 2022 - 2024\n- React', 'Développeuse web'],
+    ["Sophie Durand\nAide-soignante diplômée d'État\nsophie.durand@gmail.com\n06 11 22 33 44\n69003 Lyon\n\nEXPÉRIENCES\nAide-soignante — EHPAD Les Tilleuls — 2019 - 2024", "Aide-soignante diplômée d'État"],
+    ['Karim Benali\nBoulanger\nkarim@x.fr\n\nEXPÉRIENCE\nBoulanger — Maison Dupain — 2018 - 2024', 'Boulanger'],
+    // Aucun titre dans l'en-tête : laissé vide (rien n'est inventé), pas d'intitulé d'expérience ni de nom
+    ['Jean Petit\njean@x.fr\n\nEXPÉRIENCE\nChauffeur livreur — Transports Sud — 2020 - 2024', '']
+  ];
+  for (const [text, title] of cases) {
+    const r = parseCvSemantically(text);
+    assert.equal(r.title, title, text.split('\n')[0]);
+    assert.notEqual(r.title, r.fullName);
+  }
+});
