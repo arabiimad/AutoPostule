@@ -259,12 +259,11 @@ export const MasterProfileView: React.FC<MasterProfileViewProps> = ({
           <section className={cardClass} aria-labelledby={fid('s-links')}>
             <h2 id={fid('s-links')} className={cardTitleClass}>
               <LinkIcon className="h-4 w-4 text-brand-600" aria-hidden="true" />
-              Liens et Overleaf
+              Liens
             </h2>
             <div className="space-y-3">
               {field('githubUrl', 'Portfolio / lien professionnel (facultatif)', { placeholder: 'mon-portfolio.fr, site pro ou GitHub' })}
               {field('linkedinUrl', 'Profil LinkedIn', { placeholder: 'linkedin.com/in/mon-profil' })}
-              {field('overleafUser', 'Identifiant Overleaf (facultatif)', { placeholder: 'mon_pseudo_overleaf' })}
             </div>
           </section>
 

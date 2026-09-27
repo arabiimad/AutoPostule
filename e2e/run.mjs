@@ -236,6 +236,12 @@ try {
   ]).catch(() => [null]);
   const pdfOk = dl ? fs.readFileSync(await dl.path()).subarray(0, 4).toString() === '%PDF' : false;
   check('PDF Web téléchargé (Chromium)', pdfOk, dl ? '' : 'aucun téléchargement');
+  const [zipDl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 30000 }),
+    page.getByRole('button', { name: /Projet Overleaf \(\.zip\)/ }).click()
+  ]).catch(() => [null]);
+  const zipNames = zipDl ? (await import('node:child_process')).execFileSync('python3', ['-c', 'import zipfile,sys; print(",".join(zipfile.ZipFile(sys.argv[1]).namelist()))', await zipDl.path()]).toString().trim() : '';
+  check('projet Overleaf complet (.zip : CV, lettre, mode d’emploi)', /cv\.tex/.test(zipNames) && /lettre\.(tex|txt)/.test(zipNames) && /LISEZMOI/.test(zipNames), zipNames);
   await page.getByRole('button', { name: 'Valider et postuler' }).click();
   await page.waitForTimeout(800);
   body = await page.textContent('body');

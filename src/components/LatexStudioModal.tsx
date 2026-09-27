@@ -16,6 +16,7 @@ import { assessFit, candidateHasSkill } from '../utils/skillMatcher';
 import { CvContentEditor } from './studio/CvContentEditor';
 import { getApplyUrl } from '../utils/jobLinks';
 import { apiFetch } from '../utils/api';
+import { createZip, dataUrlBytes } from '../utils/zip';
 import { normalizeCvTemplate, PHOTO_TEMPLATES } from '../utils/templates';
 import { Badge, Button, Card, EmptyState, FitBadge, Modal, Tabs, cx } from './ui';
 
@@ -396,6 +397,34 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
     downloadText(latexCode, `CV_${(userProfile.fullName || 'Candidat').replace(/\s+/g, '_')}_${job?.company || 'Poste'}.tex`);
   };
 
+  /**
+   * Projet complet pour Overleaf (.zip) : CV, lettre et photo. À téléverser via « Nouveau projet → Téléverser un projet ».
+   * (L'envoi direct à Overleaf ne transmet que le code : la photo n'y figurerait pas.)
+   */
+  const handleOverleafZip = async () => {
+    setErrorMessage(null);
+    const files: { name: string; data: Uint8Array | string }[] = [{ name: 'cv.tex', data: latexCode }];
+    const photo = PHOTO_TEMPLATES.includes(template) ? dataUrlBytes(userProfile.photo) : null;
+    if (photo) files.push({ name: 'photo.jpg', data: photo });
+    if (coverLetter.trim()) {
+      try {
+        files.push({ name: 'lettre.tex', data: await renderLetterLatex() });
+      } catch {
+        files.push({ name: 'lettre.txt', data: coverLetter });
+      }
+    }
+    files.push({ name: 'LISEZMOI.txt', data: 'Overleaf : Nouveau projet > Téléverser un projet > choisir ce fichier .zip.\nCompilez cv.tex (et lettre.tex) avec pdfLaTeX.\n' });
+    const zip = createZip(files);
+    const url = URL.createObjectURL(new Blob([zip as BlobPart], { type: 'application/zip' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `CV_${(userProfile.fullName || 'Candidat').replace(/\s+/g, '_')}_${(job?.company || 'Poste').replace(/[^\p{L}\p{N}]+/gu, '_')}_Overleaf.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
   const handleOpenOverleaf = () => {
     try {
       // Official Overleaf POST API allows transmitting full uncompressed LaTeX documents
@@ -551,9 +580,13 @@ export const LatexStudioModal: React.FC<LatexStudioModalProps> = ({
               {isCompiling ? 'Compilation…' : 'PDF'}
             </Button>
           )}
-          <Button size="sm" variant="secondary" onClick={handleOpenOverleaf} disabled={!latexCode} title="Ouvre ce code dans Overleaf">
+          <Button size="sm" variant="secondary" onClick={handleOpenOverleaf} disabled={!latexCode} title="Copie le code du CV dans un nouveau projet Overleaf (sans la photo)">
             <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
             Ouvrir dans Overleaf
+          </Button>
+          <Button size="sm" variant="secondary" onClick={handleOverleafZip} disabled={!latexCode} title="CV, lettre et photo, à téléverser dans Overleaf (Nouveau projet → Téléverser un projet)">
+            <Download className="h-3.5 w-3.5" aria-hidden="true" />
+            Projet Overleaf (.zip)
           </Button>
         </div>
       </div>
