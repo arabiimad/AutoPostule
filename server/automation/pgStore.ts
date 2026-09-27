@@ -13,13 +13,26 @@ const validDate = (v: unknown) => {
   return d && !Number.isNaN(d.getTime()) ? d.toISOString() : null;
 };
 
+/** SSL requis pour une base distante (Supabase) ; pas pour une base locale, une socket ou sslmode=disable. */
+export function needsSsl(url: string): boolean {
+  try {
+    // « postgresql://user@/base?host=/socket » n'a pas d'hôte : URL() le refuse sans un hôte fictif
+    const u = new URL(url.replace(/^(postgres(?:ql)?:\/\/[^/@]*@)\//, "$1localhost/"));
+    if (u.searchParams.get("sslmode") === "disable") return false;
+    const host = u.searchParams.get("host") || u.hostname;
+    return !(host.startsWith("/") || ["localhost", "127.0.0.1", "::1", ""].includes(host));
+  } catch {
+    return true;
+  }
+}
+
 export class PgAutomationStore implements AutomationStore {
   constructor(readonly pool: pg.Pool) {}
 
   static fromEnv(): PgAutomationStore | null {
     const url = process.env.AUTOMATION_DATABASE_URL;
     if (!url) return null;
-    return new PgAutomationStore(new pg.Pool({ connectionString: url, max: 5, ssl: /sslmode=disable|localhost|127\.0\.0\.1|host=\//.test(url) ? undefined : { rejectUnauthorized: false } }));
+    return new PgAutomationStore(new pg.Pool({ connectionString: url, max: 5, ssl: needsSsl(url) ? { rejectUnauthorized: false } : undefined }));
   }
 
   private async q<T = any>(text: string, values: unknown[] = []): Promise<T[]> {
@@ -131,6 +144,45 @@ export class PgAutomationStore implements AutomationStore {
       `insert into public.automation_events (user_id, task_id, attempt_id, type, message, data) values ($1, $2, $3, $4, $5, $6)`,
       [userId, refs.taskId ?? null, refs.attemptId ?? null, type, message, JSON.stringify(data)]
     );
+  }
+
+  /**
+   * Planifie une recherche pour chaque automatisation active sans recherche depuis `everyHours` heures
+   * (verrou consultatif : plusieurs workers ne planifient jamais deux fois).
+   */
+  async scheduleSearches(everyHours: number): Promise<number> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(hashtext('automation:schedule'))");
+      const r = await client.query(
+        `insert into public.automation_tasks (user_id, kind)
+         select p.user_id, 'search' from public.automation_policies p
+          where p.enabled and not p.paused
+            and not exists (select 1 from public.automation_tasks t
+                             where t.user_id = p.user_id and t.kind = 'search'
+                               and (t.status in ('queued', 'running') or t.created_at > now() - make_interval(hours => $1)))`,
+        [everyHours]
+      );
+      await client.query("commit");
+      return r.rowCount || 0;
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** Envois interrompus (worker arrêté pendant l'envoi) : « résultat incertain », jamais renvoyés automatiquement. */
+  async sweepInterruptedSubmissions(olderThanMinutes = 10): Promise<number> {
+    const rows = await this.q(
+      `update public.application_attempts set status = 'uncertain', error = 'Envoi interrompu : vérifiez vos messages envoyés.'
+        where status = 'submitting' and submitting_at < now() - make_interval(mins => $1) returning user_id, offer_id`,
+      [olderThanMinutes]
+    );
+    for (const r of rows) await this.logEvent(r.user_id, "uncertain", "Envoi interrompu : vérifiez vos messages envoyés avant de renvoyer.", { offerId: r.offer_id });
+    return rows.length;
   }
 
   async close() {

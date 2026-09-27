@@ -47,3 +47,6 @@ jobs:
 
       - name: Tests de bout en bout (sources simulées)
         run: npm run test:e2e
+
+      - name: Auto-candidature de bout en bout (worker réel, PostgreSQL, Gmail simulé)
+        run: npm run test:e2e:worker

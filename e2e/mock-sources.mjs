@@ -22,7 +22,7 @@ const lba = { jobs: [
   { identifier: { id: 'r2' }, workplace: { siret: '44306184100047', brand: null, name: 'PROVENCE LOGICIELS', size: '20-49', location: { address: '3 avenue de la Gare 84130 LE PONTET', geopoint: { type: 'Point', coordinates: [4.86, 43.96] } }, domain: { naf: { code: '58.29C', label: 'Édition de logiciels applicatifs' } } }, apply: { url: 'https://labonnealternance.apprentissage.beta.gouv.fr/emploi/recruteurs_lba/r2' } }
 ], warnings: [] };
 const ft = { resultats: [
-  { id: '201ABC', intitule: 'Développeur Python H/F', description: "DataSud, spécialiste de la donnée énergétique, renforce son équipe technique.\nVous développerez des services en Python (Django), conteneurisés avec Docker et déployés en CI/CD.\nExpérience : 2 ans souhaités. Télétravail 2 jours par semaine.", dateCreation: d(1), lieuTravail: { libelle: '84 - AVIGNON', latitude: 43.95, longitude: 4.8 }, entreprise: { nom: 'DataSud' }, typeContrat: 'CDI', competences: [{ libelle: 'Python' }], salaire: { libelle: 'Annuel de 36000 à 42000 Euros' }, origineOffre: { urlOrigine: 'https://candidat.francetravail.fr/offres/recherche/detail/201ABC' } }
+  { id: '201ABC', intitule: 'Développeur Python H/F', description: "DataSud, spécialiste de la donnée énergétique, renforce son équipe technique.\nVous développerez des services en Python (Django), conteneurisés avec Docker et déployés en CI/CD.\nExpérience : 2 ans souhaités. Télétravail 2 jours par semaine.\nCandidatures (CV et lettre de motivation) : recrutement@datasud.fr", dateCreation: d(1), lieuTravail: { libelle: '84 - AVIGNON', latitude: 43.95, longitude: 4.8 }, entreprise: { nom: 'DataSud' }, typeContrat: 'CDI', competences: [{ libelle: 'Python' }], salaire: { libelle: 'Annuel de 36000 à 42000 Euros' }, origineOffre: { urlOrigine: 'https://candidat.francetravail.fr/offres/recherche/detail/201ABC' } }
 ] };
 const js = { status: 'OK', data: [
   { job_id: 'j1', job_title: 'Développeur Front-End React (H/F)', employer_name: 'Mistral Numérique', employer_logo: null, job_publisher: 'LinkedIn', job_employment_type: 'FULLTIME', job_apply_link: 'https://www.linkedin.com/jobs/view/1', apply_options: [{ publisher: 'LinkedIn', apply_link: 'https://www.linkedin.com/jobs/view/1' }, { publisher: 'Welcome to the Jungle', apply_link: 'https://www.welcometothejungle.com/fr/companies/mistral/jobs/1' }, { publisher: 'Indeed', apply_link: 'https://fr.indeed.com/viewjob?jk=1' }], job_description: "Mistral Numérique édite une plateforme SaaS utilisée par 300 établissements de santé.\n\nCe que vous ferez :\n- Construire des interfaces accessibles en React et TypeScript\n- Collaborer avec les designers (Figma)\n- Écrire des tests et améliorer la performance\n\nStack : React, TypeScript, Vite, Git, GitLab CI.\nAvantages : télétravail partiel, RTT, mutuelle prise en charge à 100 %.", job_is_remote: false, job_posted_at_datetime_utc: d(0), job_city: 'Avignon', job_state: "Provence-Alpes-Côte d'Azur", job_latitude: 43.9464, job_longitude: 4.8089, job_min_salary: 38000, job_max_salary: 46000, job_salary_period: 'YEAR' },
@@ -71,6 +71,9 @@ function gemini(req, res, u) {
         skillsOrder: ['React', 'TypeScript', 'Node.js'],
         highlights: ['Maîtrise de React et TypeScript']
       });
+    } else if (prompt.includes('relecteur de CV')) {
+      // Relecture sémantique : approuve les propositions restantes (les garde-fous déterministes ont déjà filtré)
+      text = JSON.stringify({ approved: [...prompt.matchAll(/\\"ref\\":\\"([^\\"]+)\\"/g)].map((m) => m[1]) });
     } else if (prompt.includes('Réécris')) {
       text = JSON.stringify({ text: 'Conçu des interfaces React accessibles et des API REST en Node.js' });
     } else {
@@ -79,6 +82,9 @@ function gemini(req, res, u) {
     res.end(JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text }] }, finishReason: 'STOP' }] }));
   });
 }
+
+/** Messages reçus par la fausse API Gmail. */
+export const mailbox = [];
 
 export function startMockSources(port = 4011) {
   return new Promise((resolve) => {
@@ -102,6 +108,18 @@ export function startMockSources(port = 4011) {
       }
       if (u.startsWith('/jbl')) return res.end(JSON.stringify(jbl));
       if (u.includes(':generateContent')) return gemini(req, res, u);
+      // Fausse API Gmail : messages reçus conservés pour les vérifications (worker d'auto-candidature)
+      if (u.startsWith('/gmail/send') && req.method === 'POST') {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => {
+          const raw = Buffer.from(JSON.parse(body || '{}').raw || '', 'base64url').toString('utf8');
+          mailbox.push({ auth: req.headers.authorization || '', raw });
+          res.end(JSON.stringify({ id: `gmail-${mailbox.length}` }));
+        });
+        return;
+      }
+      if (u.startsWith('/gmail/sent')) return res.end(JSON.stringify(mailbox));
       res.statusCode = 404; res.end('{}');
     });
     server.listen(port, () => resolve(server));

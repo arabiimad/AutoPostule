@@ -99,3 +99,11 @@ test('limite quotidienne appliquée par la base', { skip }, async () => {
   const deferred = await q(`select 1 from public.automation_tasks where offer_id in ('l1', 'l2') and status = 'queued' and run_after > now() + interval '1 minute'`);
   assert.equal(deferred.length, 1);
 });
+
+test('SSL : exigé pour une base distante, pas pour une base locale', async () => {
+  const { needsSsl } = await import('../server/automation/pgStore.ts');
+  assert.equal(needsSsl('postgresql://postgres.abc:pw@aws-0-eu-central-1.pooler.supabase.com:5432/postgres'), true);
+  assert.equal(needsSsl('postgresql://postgres@/db?host=%2Fvar%2Ftmp%2Fpg&port=5433'), false);
+  assert.equal(needsSsl('postgresql://postgres@localhost:5432/db'), false);
+  assert.equal(needsSsl('postgresql://u@db.example.com/db?sslmode=disable'), false);
+});
