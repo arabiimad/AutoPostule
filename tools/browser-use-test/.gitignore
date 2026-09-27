@@ -1,3 +1,5 @@
 .venv/
 submissions.json
 site.log
+submissions_v2.json
+bench_v2_results.json
