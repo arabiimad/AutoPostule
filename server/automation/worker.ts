@@ -11,7 +11,8 @@
  *   7. preuve conservée. Sans réponse du fournisseur : « résultat incertain », jamais de nouvel envoi aveugle.
  */
 import { createHash } from "node:crypto";
-import type { AutomationStore, Task, TaskStatus } from "./store.ts";
+import type { AutomationStore, Task, TaskStatus, MailConnection } from "./store.ts";
+import { classifyReply, type InboundMessage } from "./replies.ts";
 import { qualifyOffer, type AutomationPolicy } from "./policy.ts";
 import { resolveApplyChannel, isAutomatable, type ApplyChannel } from "./channels.ts";
 import { MailSendError, decryptToken, encryptToken, sha256, type MailProvider, type OutgoingMail, type SendResult } from "./email.ts";
@@ -33,6 +34,7 @@ export interface WorkerDeps {
   refreshAccessToken(provider: MailProvider, refreshToken: string): Promise<{ accessToken: string; expiresAt: string; refreshToken?: string }>;
   searchOffers?(policy: AutomationPolicy, profile: any): Promise<any[]>;
   /** Formulaire Lever / Greenhouse (navigateur côté serveur). beforeSubmit revérifie la pause juste avant le clic. */
+  fetchReplies?(provider: MailProvider, token: string, destination: string, since: string): Promise<InboundMessage[]>;
   submitForm?(channel: Extract<ApplyChannel, { kind: "lever" | "greenhouse" }>, input: FormInput, beforeSubmit: () => Promise<boolean>): Promise<FormResult>;
   now?: () => Date;
 }
@@ -51,6 +53,72 @@ function secondsUntilTomorrowParis(now: Date): number {
   const next = new Date(paris);
   next.setHours(24, 5, 0, 0); // 00 h 05 heure de Paris
   return Math.max(60, Math.round((next.getTime() - paris.getTime()) / 1000));
+}
+
+/** Jeton d'accès valide (renouvelé et stocké chiffré si besoin). Lève MailSendError(authExpired) si l'accès est révoqué. */
+async function accessTokenFor(userId: string, conn: MailConnection, deps: WorkerDeps, now: Date): Promise<string> {
+  const fresh = conn.accessTokenEnc && conn.expiresAt && new Date(conn.expiresAt).getTime() > now.getTime() + 120_000;
+  if (fresh) return decryptToken(conn.accessTokenEnc!);
+  const r = await deps.refreshAccessToken(conn.provider, decryptToken(conn.refreshTokenEnc!));
+  await deps.store.saveMailTokens(userId, conn.provider, { accessTokenEnc: encryptToken(r.accessToken), ...(r.refreshToken ? { refreshTokenEnc: encryptToken(r.refreshToken) } : {}), expiresAt: r.expiresAt });
+  return r.accessToken;
+}
+
+export const canTrackReplies = (conn: MailConnection | null) =>
+  !!conn && conn.status === "active" && (conn.scopes || []).some((s) => /gmail\.readonly|Mail\.Read$/.test(s));
+
+/**
+ * Suivi des réponses : accusé de réception → envoi confirmé ; entretien / refus → statut du dossier mis à jour,
+ * relance annulée, notification. Chaque message n'est traité qu'une fois.
+ */
+export async function trackReplies(task: Task, deps: WorkerDeps): Promise<Outcome> {
+  const { store } = deps;
+  const now = deps.now?.() ?? new Date();
+  const conn = await store.getMailConnection(task.userId);
+  if (!canTrackReplies(conn) || !deps.fetchReplies) return done("Suivi des réponses non autorisé.");
+  let token: string;
+  try {
+    token = await accessTokenFor(task.userId, conn!, deps, now);
+  } catch (e: any) {
+    if (e instanceof MailSendError && e.authExpired) {
+      await store.saveMailTokens(task.userId, conn!.provider, { status: "revoked" });
+      return needsUser("Accès à la messagerie expiré : reconnectez-la.");
+    }
+    return retry("Messagerie momentanément indisponible.", 30 * 60);
+  }
+  let handled = 0;
+  for (const a of await store.listTrackableAttempts(task.userId)) {
+    const isForm = a.channel !== "email";
+    // Formulaires : réponses envoyées par le logiciel de recrutement au nom de l'entreprise
+    const target = isForm ? (a.channel === "lever" ? "no-reply@hire.lever.co" : "no-reply@greenhouse.io") : a.destination;
+    let messages: InboundMessage[];
+    try {
+      messages = await deps.fetchReplies(conn!.provider, token, target, a.since);
+    } catch {
+      continue;
+    }
+    const company = a.company.toLowerCase();
+    for (const m of messages.sort((x, y) => x.receivedAt.localeCompare(y.receivedAt))) {
+      if (isForm && !`${m.from} ${m.subject}`.toLowerCase().includes(company)) continue;
+      if (await store.hasProcessedReply(task.userId, m.id)) continue;
+      const kind = classifyReply(m);
+      handled++;
+      await store.logEvent(task.userId, "reply", `Réponse de ${a.company} : ${kind === "interview" ? "proposition d'entretien" : kind === "rejection" ? "candidature non retenue" : kind === "acknowledgement" ? "accusé de réception" : "message reçu"}.`,
+        { messageId: m.id, kind, offerId: a.offerId, subject: m.subject.slice(0, 160) }, { taskId: task.id, attemptId: a.attemptId });
+      if (a.status !== "confirmed") await store.recordSubmission(a.attemptId, "confirmed", { confirmedBy: kind, messageId: m.id, at: m.receivedAt });
+      a.status = "confirmed";
+      const appPatch: Record<string, any> = { id: autoApplicationId(a.offerId) };
+      if (kind === "interview") Object.assign(appPatch, { status: "interview", respondedAt: m.receivedAt, followUpAt: "" });
+      else if (kind === "rejection") Object.assign(appPatch, { status: "rejected", respondedAt: m.receivedAt, followUpAt: "" });
+      else if (kind === "other") Object.assign(appPatch, { respondedAt: m.receivedAt, followUpAt: "" });
+      if (Object.keys(appPatch).length > 1) await store.upsertApplication(task.userId, appPatch);
+      const titles: Record<string, string> = { interview: "Entretien proposé", rejection: "Réponse d'un recruteur", other: "Message d'un recruteur" };
+      if (kind !== "acknowledgement") {
+        await store.notify(task.userId, { title: titles[kind], body: `${a.company} — ${m.subject}`.slice(0, 180), url: "/?onglet=candidatures", tag: `reponse-${m.id}` }).catch(() => {});
+      }
+    }
+  }
+  return done(`${handled} réponse(s) traitée(s).`);
 }
 
 export async function processOffer(task: Task, deps: WorkerDeps): Promise<Outcome> {
@@ -130,13 +198,7 @@ export async function processOffer(task: Task, deps: WorkerDeps): Promise<Outcom
   // Jeton d'accès valide (renouvelé si besoin)
   let accessToken: string;
   try {
-    const fresh = conn.accessTokenEnc && conn.expiresAt && new Date(conn.expiresAt).getTime() > now.getTime() + 120_000;
-    if (fresh) accessToken = decryptToken(conn.accessTokenEnc!);
-    else {
-      const r = await deps.refreshAccessToken(conn.provider, decryptToken(conn.refreshTokenEnc!));
-      accessToken = r.accessToken;
-      await store.saveMailTokens(userId, conn.provider, { accessTokenEnc: encryptToken(r.accessToken), ...(r.refreshToken ? { refreshTokenEnc: encryptToken(r.refreshToken) } : {}), expiresAt: r.expiresAt });
-    }
+    accessToken = await accessTokenFor(userId, conn, deps, now);
   } catch (e: any) {
     if (e instanceof MailSendError && e.authExpired) {
       await store.saveMailTokens(userId, conn.provider, { status: "revoked" });
@@ -293,6 +355,7 @@ export async function runOnce(deps: WorkerDeps, opts: { limit?: number; leaseSec
     try {
       outcome = task.kind === "process_offer" ? await processOffer(task, deps)
         : task.kind === "search" ? await runSearch(task, deps)
+        : task.kind === "track_replies" ? await trackReplies(task, deps)
         : { status: "failed", message: `Type de tâche non géré : ${task.kind}` };
     } catch (e: any) {
       outcome = retry(`Erreur imprévue : ${String(e?.message || e).slice(0, 200)}`, 5 * 60 * task.attempts);

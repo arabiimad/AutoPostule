@@ -33,6 +33,11 @@ const SCOPES: Record<Provider, string> = {
   gmail: "openid email https://www.googleapis.com/auth/gmail.send",
   outlook: "openid email offline_access https://graph.microsoft.com/Mail.Send"
 };
+/** Facultatif : lecture de la boîte pour repérer les réponses des recruteurs. */
+const READ_SCOPES: Record<Provider, string> = {
+  gmail: "https://www.googleapis.com/auth/gmail.readonly",
+  outlook: "https://graph.microsoft.com/Mail.Read"
+};
 
 let pool: pg.Pool | null | undefined;
 function db(): pg.Pool | null {
@@ -129,7 +134,7 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
   app.get("/api/automation", auth, limiter, guard, async (req: any, res) => {
     const uid = req.uid;
     const [policyRow] = await q(`select * from public.automation_policies where user_id = $1`, [uid]);
-    const connections = await q(`select provider, email, status, updated_at from public.mail_connections where user_id = $1 order by provider`, [uid]);
+    const connections = await q(`select provider, email, status, scopes, updated_at from public.mail_connections where user_id = $1 order by provider`, [uid]);
     const [today] = await q(
       `select count(*) filter (where status in ('submitted', 'confirmed'))::int as sent,
               count(*) filter (where status = 'uncertain')::int as uncertain
@@ -162,7 +167,7 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
       maxDaily: maxDaily(),
       oauth: { gmail: !!process.env.GOOGLE_CLIENT_ID, outlook: !!process.env.MICROSOFT_CLIENT_ID },
       policy,
-      connections: connections.map((c) => ({ provider: c.provider, email: c.email, status: c.status })),
+      connections: connections.map((c) => ({ provider: c.provider, email: c.email, status: c.status, tracksReplies: (c.scopes || []).some((x: string) => /gmail\.readonly|Mail\.Read$/.test(x)) })),
       today: { sent: today?.sent || 0, uncertain: today?.uncertain || 0, limit: policy?.dailyLimit ?? null },
       pending: tasks?.pending || 0,
       needsUser: tasks?.needs_user || 0,
@@ -261,7 +266,8 @@ export function registerAutomationRoutes(app: Express, opts: { auth?: any } = {}
     const clientId = provider === "gmail" ? process.env.GOOGLE_CLIENT_ID : process.env.MICROSOFT_CLIENT_ID;
     if (!clientId || !publicUrl()) return res.status(501).json({ success: false, error: "Connexion de cette messagerie non configurée sur le serveur." });
     const params = new URLSearchParams({
-      client_id: clientId, redirect_uri: redirectUri(provider), response_type: "code", scope: SCOPES[provider],
+      client_id: clientId, redirect_uri: redirectUri(provider), response_type: "code",
+      scope: req.body?.trackReplies ? `${SCOPES[provider]} ${READ_SCOPES[provider]}` : SCOPES[provider],
       state: signState(req.uid, provider), prompt: provider === "gmail" ? "consent" : "select_account",
       ...(provider === "gmail" ? { access_type: "offline", include_granted_scopes: "true" } : {})
     });

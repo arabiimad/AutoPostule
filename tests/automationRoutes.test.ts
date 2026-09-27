@@ -140,7 +140,7 @@ test('OAuth Gmail : état signé, falsification refusée, jetons stockés chiffr
   assert.doesNotMatch(c.access_token_enc + c.refresh_token_enc, /secret/);
   assert.equal(decryptToken(c.refresh_token_enc), 'refresh-secret');
   const st = await call('GET', '/api/automation', A);
-  assert.deepEqual(st.json.connections, [{ provider: 'gmail', email: 'karim@gmail.com', status: 'active' }]);
+  assert.deepEqual(st.json.connections, [{ provider: 'gmail', email: 'karim@gmail.com', status: 'active', tracksReplies: false }]);
   assert.doesNotMatch(JSON.stringify(st.json), /secret|token_enc/);
 });
 

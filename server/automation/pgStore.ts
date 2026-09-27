@@ -5,7 +5,7 @@
  * les fonctions SQL de supabase/migrations/002_automation.sql.
  */
 import pg from "pg";
-import type { AutomationStore, Task, MailConnection, ReserveInput, AttemptStatus, TaskStatus, TaskKind } from "./store.ts";
+import type { AutomationStore, Task, MailConnection, ReserveInput, AttemptStatus, TaskStatus, TaskKind, TrackableAttempt } from "./store.ts";
 import { policyFromRow } from "./policy.ts";
 import { sendPushToUser } from "./push.ts";
 
@@ -117,7 +117,7 @@ export class PgAutomationStore implements AutomationStore {
   async getMailConnection(userId: string): Promise<MailConnection | null> {
     const [r] = await this.q(`select * from public.mail_connections where user_id = $1 and status = 'active' order by updated_at desc limit 1`, [userId]);
     if (!r) return null;
-    return { provider: r.provider, email: r.email, status: r.status, accessTokenEnc: r.access_token_enc, refreshTokenEnc: r.refresh_token_enc, expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : null };
+    return { provider: r.provider, email: r.email, status: r.status, accessTokenEnc: r.access_token_enc, refreshTokenEnc: r.refresh_token_enc, expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : null, scopes: r.scopes || [] };
   }
 
   async getPersonalAnswers(userId: string) {
@@ -189,6 +189,34 @@ export class PgAutomationStore implements AutomationStore {
     );
     for (const r of rows) await this.logEvent(r.user_id, "uncertain", "Envoi interrompu : vérifiez vos messages envoyés avant de renvoyer.", { offerId: r.offer_id });
     return rows.length;
+  }
+
+  async listTrackableAttempts(userId: string): Promise<TrackableAttempt[]> {
+    const rows = await this.q(
+      `select a.id, a.offer_id, a.channel, a.destination, a.status, coalesce(a.submitted_at, a.submitting_at, a.created_at) as since, o.company, o.title
+         from public.application_attempts a join public.job_offers o on o.id = a.offer_id
+        where a.user_id = $1 and a.status in ('submitted', 'confirmed', 'uncertain') and a.created_at > now() - interval '60 days'`,
+      [userId]
+    );
+    return rows.map((r) => ({ attemptId: r.id, offerId: r.offer_id, company: r.company, title: r.title, channel: r.channel, destination: r.destination, status: r.status, since: new Date(r.since).toISOString() }));
+  }
+
+  async hasProcessedReply(userId: string, messageId: string) {
+    return (await this.q(`select 1 from public.automation_events where user_id = $1 and type = 'reply' and data->>'messageId' = $2 limit 1`, [userId, messageId])).length > 0;
+  }
+
+  /** Suivi des réponses planifié pour les comptes qui l'ont autorisé et ont des candidatures récentes. */
+  async scheduleReplyTracking(everyHours: number): Promise<number> {
+    const r = await this.pool.query(
+      `insert into public.automation_tasks (user_id, kind)
+       select distinct c.user_id, 'track_replies' from public.mail_connections c
+        where c.status = 'active' and c.scopes && array['https://www.googleapis.com/auth/gmail.readonly', 'https://graph.microsoft.com/Mail.Read', 'Mail.Read']
+          and exists (select 1 from public.application_attempts a where a.user_id = c.user_id and a.status in ('submitted', 'confirmed', 'uncertain') and a.created_at > now() - interval '60 days')
+          and not exists (select 1 from public.automation_tasks t where t.user_id = c.user_id and t.kind = 'track_replies'
+                            and (t.status in ('queued', 'running') or t.created_at > now() - make_interval(hours => $1)))`,
+      [everyHours]
+    );
+    return r.rowCount || 0;
   }
 
   async notify(userId: string, message: { title: string; body: string; url: string; tag?: string }) {

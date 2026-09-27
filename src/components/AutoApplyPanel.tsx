@@ -11,7 +11,7 @@ interface AutomationState {
     enabled: boolean; paused: boolean; roles: string[]; contracts: string[]; locations: string[]; remote: string[];
     minSalary: number | null; minFit: number; excludedCompanies: string[]; excludedKeywords: string[]; channels: string[]; dailyLimit: number; consentedAt?: string;
   };
-  connections: { provider: 'gmail' | 'outlook'; email: string; status: string }[];
+  connections: { provider: 'gmail' | 'outlook'; email: string; status: string; tracksReplies?: boolean }[];
   today: { sent: number; uncertain: number; limit: number | null };
   pending: number;
   needsUser: number;
@@ -44,6 +44,7 @@ export const AutoApplyPanel: React.FC<{ defaultRoles: string[]; defaultLocation?
   const [consent, setConsent] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [pushOn, setPushOn] = useState(false);
+  const [trackReplies, setTrackReplies] = useState(true);
 
   useEffect(() => {
     if (!pushSupported()) return;
@@ -167,8 +168,15 @@ export const AutoApplyPanel: React.FC<{ defaultRoles: string[]; defaultLocation?
   };
 
   const connect = async (provider: 'gmail' | 'outlook') => {
-    const data = await post(`/api/automation/connect/${provider}`);
-    if (data?.url) window.location.assign(data.url);
+    setBusy(true);
+    try {
+      const res = await apiFetch(`/api/automation/connect/${provider}`, { trackReplies });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.url) return onNotify('Connexion impossible', data?.error || 'Réessayez.', true);
+      window.location.assign(data.url);
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (unavailable) {
@@ -218,11 +226,13 @@ export const AutoApplyPanel: React.FC<{ defaultRoles: string[]; defaultLocation?
         <p className="text-sm font-medium text-slate-700">Messagerie d’envoi</p>
         {mail ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            <span className="flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {PROVIDER_LABEL[mail.provider]} : {mail.email}</span>
+            <span className="flex items-center gap-1.5"><CheckCircle2 className="h-4 w-4" aria-hidden="true" /> {PROVIDER_LABEL[mail.provider]} : {mail.email}{mail.tracksReplies ? ' · réponses suivies' : ''}</span>
             <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={async () => { await post(`/api/automation/connections/${mail.provider}`, 'DELETE'); load(); }}>Déconnecter</Button>
           </div>
         ) : (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="basis-full text-xs text-slate-600"><input type="checkbox" className="mr-1.5 align-middle" checked={trackReplies} onChange={e => setTrackReplies(e.target.checked)} />
+              Suivre aussi les réponses des recruteurs (lecture des messages reçus des entreprises auxquelles vous avez postulé ; leur contenu n’est ni conservé ni analysé par l’IA)</label>
             {(['gmail', 'outlook'] as const).map(pv => (
               <Button key={pv} type="button" size="sm" variant="secondary" disabled={busy || !state.oauth[pv]} onClick={() => connect(pv)} title={state.oauth[pv] ? undefined : 'Non configuré sur le serveur'}>
                 <Mail className="h-3.5 w-3.5" aria-hidden="true" /> Connecter {PROVIDER_LABEL[pv]}

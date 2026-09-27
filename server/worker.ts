@@ -40,8 +40,12 @@ let lastMaintenance = 0;
 async function tick() {
   if (Date.now() - lastMaintenance > 5 * 60_000) {
     lastMaintenance = Date.now();
-    const [scheduled, swept] = await Promise.all([store!.scheduleSearches(searchEveryHours), store!.sweepInterruptedSubmissions()]);
-    if (scheduled || swept) logEvent("info", "automation_maintenance", { scheduled, swept });
+    const [scheduled, swept, tracking] = await Promise.all([
+      store!.scheduleSearches(searchEveryHours),
+      store!.sweepInterruptedSubmissions(),
+      store!.scheduleReplyTracking(3)
+    ]);
+    if (scheduled || swept || tracking) logEvent("info", "automation_maintenance", { scheduled, swept, tracking });
   }
   // Traite tant qu'il y a du travail, puis attend
   while (!stopping && (await runOnce(deps, { limit: concurrency, leaseSeconds: 600 })) > 0) { /* lot suivant */ }

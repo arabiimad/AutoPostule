@@ -8,6 +8,7 @@ import { applyTailored } from "../cvPipeline.ts";
 import { renderCvHtml, generatePdfFromHtml } from "../pdf.ts";
 import { normalizeTemplate } from "../latex.ts";
 import { sendMail, refreshAccessToken } from "./email.ts";
+import { fetchReplies } from "./replies.ts";
 import type { WorkerDeps } from "./worker.ts";
 import type { AutomationStore } from "./store.ts";
 import type { AutomationPolicy } from "./policy.ts";
@@ -61,6 +62,7 @@ export function realDeps(store: AutomationStore, workerId: string): WorkerDeps {
     sendMail: (provider, token, mail) => sendMail(provider, token, mail),
     refreshAccessToken: (provider, rt) => refreshAccessToken(provider, rt),
     searchOffers: (policy) => searchForPolicy(policy),
+    fetchReplies: (provider, token, destination, since) => fetchReplies(provider, token, destination, since),
     async submitForm(channel, input, beforeSubmit) {
       const ctx = await (await browser()).newContext({ locale: "fr-FR", acceptDownloads: false });
       try {

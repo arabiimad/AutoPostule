@@ -133,3 +133,10 @@ test('notifications : message chiffré selon le standard Web Push (clés VAPID)'
   assert.match(String(d.headers.Authorization), /^vapid t=.+, k=/);
   assert.ok(!Buffer.from(d.body as Buffer).toString('latin1').includes('Candidature'), 'contenu chiffré');
 });
+
+test('suivi des réponses planifié seulement si la lecture est autorisée, une fois par période', { skip }, async () => {
+  assert.equal(await store.scheduleReplyTracking(3), 0, 'lecture non autorisée');
+  await q(`update public.mail_connections set scopes = array['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly'] where user_id = $1`, [U]);
+  assert.equal(await store.scheduleReplyTracking(3), 1);
+  assert.equal(await store.scheduleReplyTracking(3), 0, 'pas deux fois');
+});

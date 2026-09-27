@@ -242,3 +242,31 @@ test('notifications : envoi, action demandée ; pas une par offre de plateforme'
   await t.drain();
   assert.deepEqual(t.store.notifications.map(n => [n.title, n.url, n.tag]), [['Candidature envoyée', '/?onglet=candidatures', 'offre-n3']]);
 });
+
+test('suivi des réponses : entretien → dossier « entretien », relance annulée, notifié ; message traité une seule fois', async () => {
+  const s = setup();
+  await s.add(offer('r9'));
+  await s.drain();
+  s.store.mail.get(U)!.scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
+  const inbox = [
+    { id: 'ack', from: 'noreply-rh@r9.fr', subject: 'Candidature reçue', snippet: 'Nous avons bien reçu votre candidature.', receivedAt: new Date().toISOString() },
+    { id: 'int', from: 'Julie <julie@r9.fr>', subject: 'Entretien', snippet: 'Seriez-vous disponible pour un entretien ?', receivedAt: new Date(Date.now() + 1000).toISOString() }
+  ];
+  s.deps.fetchReplies = async (_p: string, _t: string, dest: string) => { assert.equal(dest, 'recrutement@r9.fr'); return inbox; };
+  for (let i = 0; i < 2; i++) { await s.store.enqueue({ userId: U, kind: 'track_replies' }); await s.drain(); }
+  const app = s.store.applications.get(`${U}:${autoApplicationId('r9')}`)!;
+  assert.equal(app.status, 'interview');
+  assert.equal(app.followUpAt, '');
+  assert.equal([...s.store.attempts.values()][0].status, 'confirmed');
+  assert.equal(s.store.events.filter(e => e.type === 'reply').length, 2, 'chaque message une seule fois');
+  assert.deepEqual(s.store.notifications.filter(n => n.title === 'Entretien proposé').length, 1);
+});
+
+test('suivi des réponses non autorisé : rien n’est lu', async () => {
+  const s = setup();
+  let read = false;
+  s.deps.fetchReplies = async () => { read = true; return []; };
+  await s.store.enqueue({ userId: U, kind: 'track_replies' });
+  await s.drain();
+  assert.equal(read, false);
+});

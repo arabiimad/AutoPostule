@@ -25,6 +25,19 @@ export interface MailConnection {
   accessTokenEnc: string | null;
   refreshTokenEnc: string | null;
   expiresAt: string | null;
+  /** Autorisations accordées (lecture de la boîte = suivi des réponses). */
+  scopes?: string[];
+}
+
+export interface TrackableAttempt {
+  attemptId: string;
+  offerId: string;
+  company: string;
+  title: string;
+  channel: "email" | "lever" | "greenhouse";
+  destination: string;
+  status: AttemptStatus;
+  since: string;
 }
 
 export interface ReserveInput {
@@ -55,6 +68,10 @@ export interface AutomationStore {
   /** Dossier visible dans l'application (tableau Candidatures). */
   upsertApplication(userId: string, application: Record<string, any>): Promise<void>;
   logEvent(userId: string, type: string, message: string, data?: Record<string, any>, refs?: { taskId?: number; attemptId?: string }): Promise<void>;
+  /** Candidatures envoyées dont on peut suivre les réponses (60 derniers jours). */
+  listTrackableAttempts(userId: string): Promise<TrackableAttempt[]>;
+  /** Réponse déjà traitée (identifiant du message chez le fournisseur) ? */
+  hasProcessedReply(userId: string, messageId: string): Promise<boolean>;
   /** Notification sur les appareils du candidat (sans effet si non configuré). Ne doit jamais faire échouer un traitement. */
   notify(userId: string, message: { title: string; body: string; url: string; tag?: string }): Promise<void>;
 }
@@ -164,5 +181,13 @@ export class MemoryAutomationStore implements AutomationStore {
   }
   async notify(userId: string, message: { title: string; body: string; url: string; tag?: string }) {
     this.notifications.push({ userId, ...message });
+  }
+  async listTrackableAttempts(userId: string) {
+    return [...this.attempts.values()]
+      .filter((a) => a.userId === userId && ["submitted", "confirmed", "uncertain"].includes(a.status))
+      .map((a) => ({ attemptId: a.id, offerId: a.offerId, company: this.offers.get(a.offerId)?.company || "", title: this.offers.get(a.offerId)?.title || "", channel: a.channel, destination: a.destination, status: a.status, since: new Date(a.createdAt).toISOString() }));
+  }
+  async hasProcessedReply(userId: string, messageId: string) {
+    return this.events.some((e) => e.userId === userId && e.type === "reply" && e.data?.messageId === messageId);
   }
 }
