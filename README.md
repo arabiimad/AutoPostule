@@ -15,7 +15,7 @@ npm run dev               # http://localhost:3000
 Production :
 
 ```bash
-npm run build             # interface (dist/) + serveur (dist/server.cjs)
+npm run build             # interface publique (dist/) + serveur privé (build/server/server.cjs)
 npm start                 # sert dist/ ; port = variable PORT (3000 par défaut)
 ```
 

@@ -16,8 +16,8 @@ import { e2eServerEnv, MOCK_PORT, APP_PORT } from './env.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = process.env.E2E_OUT_DIR || (await import('node:os')).tmpdir();
-if (!fs.existsSync(path.join(root, 'dist', 'server.cjs'))) {
-  console.error('dist/server.cjs introuvable : lancez d’abord « npm run build ».');
+if (!fs.existsSync(path.join(root, 'build', 'server', 'server.cjs'))) {
+  console.error('build/server/server.cjs introuvable : lancez d’abord « npm run build ».');
   process.exit(1);
 }
 
@@ -38,7 +38,7 @@ const check = (label, cond, detail = '') => {
 
 // --- Démarrage : sources simulées + serveur de production -------------------------------------------
 const mock = await startMockSources(MOCK_PORT);
-const server = spawn(process.execPath, ['dist/server.cjs'], { cwd: root, env: e2eServerEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+const server = spawn(process.execPath, ['build/server/server.cjs'], { cwd: root, env: e2eServerEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
 let serverLog = '';
 server.stdout.on('data', (d) => (serverLog += d));
 server.stderr.on('data', (d) => (serverLog += d));
@@ -55,6 +55,9 @@ const browser = await chromium.launch({ headless: !process.env.E2E_HEADED, execu
 try {
   // --- API ------------------------------------------------------------------------------------------
   console.log('\nAPI');
+  // Code serveur jamais servi publiquement (bundle et source map hors de dist/)
+  const leaks = await Promise.all(['/server.cjs', '/server.cjs.map', '/build/server/server.cjs'].map(async (u) => (await (await fetch(`${BASE}${u}`)).text()).slice(0, 400)));
+  check('code serveur et source map inaccessibles', leaks.every((t) => !/require\(|"sourcesContent"|registerLatexRoutes/.test(t)));
   const sources = await (await fetch(`${BASE}/api/jobs/sources`)).json();
   check('sources réelles détectées + quotas exposés', sources.mode === 'live' && sources.quotas?.jsearch?.limit === 200);
 

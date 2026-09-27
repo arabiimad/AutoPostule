@@ -45,7 +45,7 @@ check('comptes de test créés (API admin)', users.every((u) => u.id), JSON.stri
 
 const BASE = `http://localhost:${APP_PORT}`;
 const mock = await startMockSources(MOCK_PORT);
-const server = spawn(process.execPath, ['dist/server.cjs'], {
+const server = spawn(process.execPath, ['build/server/server.cjs'], {
   cwd: root,
   env: { ...e2eServerEnv(), AUTH_MODE: 'required', SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY },
   stdio: ['ignore', 'pipe', 'pipe']

@@ -14,8 +14,9 @@ WORKDIR /app
 ENV NODE_ENV=production PORT=3000
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/build ./build
 COPY --from=build /app/package.json ./
 USER pwuser
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://localhost:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "dist/server.cjs"]
+CMD ["node", "build/server/server.cjs"]

@@ -16,7 +16,7 @@ async function startServer() {
   await initMonitoring();
   const app = createApp();
 
-  // Production : NODE_ENV=production, ou serveur lancé depuis le bundle (npm start → dist/server.cjs)
+  // Production : NODE_ENV=production, ou serveur lancé depuis le bundle (npm start → build/server/server.cjs)
   const isProduction = process.env.NODE_ENV === "production" || /server\.cjs$/.test(process.argv[1] || "");
   if (!isProduction) {
     // Import dynamique : Vite n'est chargé qu'en développement
