@@ -4,6 +4,7 @@
  *    https://api.apprentissage.beta.gouv.fr/fr/documentation-technique — clé : LBA_API_KEY
  *  - API Offres d'emploi v2 de France Travail (CDI, CDD, alternance…)
  *    https://francetravail.io/data/api/offres-emploi — identifiants : FT_CLIENT_ID / FT_CLIENT_SECRET
+ *  - Sites carrières des entreprises (Greenhouse, Lever, Workday…) : sans clé, voir server/careerSites.ts
  *
  * Sans aucune clé configurée, le serveur bascule en mode démonstration (base locale indicative).
  */
@@ -12,6 +13,7 @@ import { extractTechnologies } from "../src/semanticCvParser.ts";
 import { QUERY_STOPWORDS } from "../src/utils/jobFilter.ts";
 import { createHash } from "node:crypto";
 import { kv, __resetKvForTests, countApiCall } from "./store.ts";
+import { searchCareerSites, careerSitesEnabled } from "./careerSites.ts";
 
 // URL surchargeables (tests, bac à sable) ; valeurs par défaut = production
 const LBA_BASE = process.env.LBA_API_BASE || "https://api.apprentissage.beta.gouv.fr/api";
@@ -49,9 +51,10 @@ export interface SourceReport {
   skipped?: string;
 }
 
-export type SourceKey = "laBonneAlternance" | "franceTravail" | "jsearch" | "adzuna" | "jooble";
+export type SourceKey = "careerSites" | "laBonneAlternance" | "franceTravail" | "jsearch" | "adzuna" | "jooble";
 
 export const SOURCE_LABELS: Record<SourceKey, string> = {
+  careerSites: "Sites carrières (Greenhouse, Lever, Workday…)",
   laBonneAlternance: "La bonne alternance",
   franceTravail: "France Travail",
   jsearch: "Google Jobs (LinkedIn, Indeed, WTTJ…)",
@@ -78,9 +81,14 @@ let fetchImpl: FetchLike = (url, init) => {
 export function __setFetchForTests(f: FetchLike) {
   fetchImpl = f;
 }
+/** Requête HTTP des sources (remplaçable dans les tests). */
+export function sourceFetch(url: string, init?: any) {
+  return fetchImpl(url, init);
+}
 
 export function getSourceStatus(): Record<SourceKey, boolean> {
   return {
+    careerSites: careerSitesEnabled(),
     laBonneAlternance: !!process.env.LBA_API_KEY,
     franceTravail: !!(process.env.FT_CLIENT_ID && process.env.FT_CLIENT_SECRET),
     jsearch: !!process.env.JSEARCH_API_KEY,
@@ -98,7 +106,7 @@ export function hasRealSources(): boolean {
 // ---------------------------------------------------------------------------
 // Cache partagé (mémoire, ou Redis si configuré — voir server/store.ts). Les clés sont hachées :
 // certaines URL contiennent des identifiants d'API.
-async function cached<T>(key: string, loader: () => Promise<T>, ttlMs = CACHE_TTL_MS): Promise<T> {
+export async function cached<T>(key: string, loader: () => Promise<T>, ttlMs = CACHE_TTL_MS): Promise<T> {
   const k = `cache:${createHash("sha1").update(key).digest("hex")}`;
   const hit = await kv().get(k);
   if (hit != null) {
@@ -192,7 +200,7 @@ function isoOrUndefined(v: any): string | undefined {
 }
 
 /** Compétences exploitables pour le score : compétences listées + compétences reconnues dans le texte. */
-function deriveSkills(listed: string[], title: string, description: string): string[] {
+export function deriveSkills(listed: string[], title: string, description: string): string[] {
   const fromText = extractTechnologies(`${title}\n${description}`);
   const short = listed.filter((s) => s && s.length <= 60);
   return Array.from(new Set([...fromText, ...short])).slice(0, 15);
@@ -753,7 +761,8 @@ async function searchJooble(params: SearchParams, geo: GeoPoint | null): Promise
 // ---------------------------------------------------------------------------
 
 /** Ordre de préférence quand la même offre vient de plusieurs sources (fiche la plus complète d'abord). */
-const SOURCE_PRIORITY: SourceKey[] = ["franceTravail", "laBonneAlternance", "jsearch", "adzuna", "jooble"];
+// Le site carrière de l'employeur passe en premier : son lien de candidature est l'officiel.
+const SOURCE_PRIORITY: SourceKey[] = ["careerSites", "franceTravail", "laBonneAlternance", "jsearch", "adzuna", "jooble"];
 
 function locationTokens(loc: string): Set<string> {
   return new Set(norm(loc).replace(/[^a-z\s-]/g, " ").split(/[\s-]+/).filter((w) => w.length > 2 && !["rue", "avenue", "boulevard", "france", "cedex"].includes(w)));
@@ -842,6 +851,14 @@ export async function searchRealJobs(params: SearchParams): Promise<RealSearchRe
     else skip("laBonneAlternance", "alternance uniquement");
   }
   if (status.adzuna) plan.push({ key: "adzuna", run: () => searchAdzuna(params, geo) });
+  if (status.careerSites) {
+    if (page > 1) skip("careerSites", "tous les résultats sont sur la première page");
+    else plan.push({ key: "careerSites", run: async () => {
+      const r = await searchCareerSites(params, geo);
+      if (r.late) warnings.push(`${r.late} site(s) carrière(s) répondent lentement : relancez la recherche pour ajouter leurs offres.`);
+      return r.jobs;
+    } });
+  }
   if (status.jsearch) {
     if (hasQuery) plan.push({ key: "jsearch", run: async () => {
       const r = await softTimeout(searchJSearch(params, geo), JSEARCH_WAIT_MS, () =>
@@ -900,7 +917,7 @@ export async function searchRealJobs(params: SearchParams): Promise<RealSearchRe
   const time = (j: JobOffer) => (j.publishedAt ? new Date(j.publishedAt).getTime() || 0 : 0);
   jobs.sort((a, b) => Number(!!a.isSpontaneous) - Number(!!b.isSpontaneous) || time(b) - time(a));
 
-  if (contract === "stage" && !status.adzuna && !status.jsearch && !status.jooble) {
+  if (contract === "stage" && !status.careerSites && !status.adzuna && !status.jsearch && !status.jooble) {
     warnings.push("Stages : ajoutez une clé Adzuna, JSearch ou Jooble pour en trouver (France Travail et La bonne alternance n'en publient pas).");
   }
 

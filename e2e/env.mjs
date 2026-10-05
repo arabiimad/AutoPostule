@@ -13,6 +13,7 @@ export function e2eServerEnv() {
     GEMINI_API_BASE_URL: m,
     LBA_API_KEY: 'e2e', FT_CLIENT_ID: 'e2e', FT_CLIENT_SECRET: 'e2e', JSEARCH_API_KEY: 'e2e', ADZUNA_APP_ID: 'e2e', ADZUNA_APP_KEY: 'e2e', JOOBLE_API_KEY: 'e2e',
     UPSTASH_REDIS_REST_URL: '', UPSTASH_REDIS_REST_TOKEN: '',
+    ATS_SOURCES: 'off',
     GEO_API_URL: `${m}/geo`,
     LBA_API_BASE: `${m}/lba`,
     LBA_ROME_URL: `${m}/rome`,

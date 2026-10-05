@@ -22,6 +22,7 @@ const GEO = [{ nom: 'Avignon', code: '84007', codeDepartement: '84', centre: { c
 
 beforeEach(() => {
   __clearCacheForTests();
+  process.env.ATS_SOURCES = 'off'; // sites carrières : testés dans careerSites.test.ts
   for (const k of ['LBA_API_KEY', 'FT_CLIENT_ID', 'FT_CLIENT_SECRET', 'JSEARCH_API_KEY', 'ADZUNA_APP_ID', 'ADZUNA_APP_KEY', 'JOOBLE_API_KEY']) delete process.env[k];
 });
 

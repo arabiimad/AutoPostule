@@ -126,7 +126,7 @@ export const JobDetail: React.FC<JobDetailProps> = ({ job, match, userProfile, a
         {/* Actions */}
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <LinkButton href={applyUrl} target="_blank" rel="noopener noreferrer" variant="primary" size="md" className="h-11">
-            {spontaneous ? 'Candidater spontanément' : `Postuler${job.origin !== 'demo' ? ` sur ${sourceShortName(job.source)}` : ''}`} <ExternalLink className="h-4 w-4" />
+            {spontaneous ? 'Candidater spontanément' : job.origin === 'site-carriere' ? `Postuler sur le site de ${job.company}` : `Postuler${job.origin !== 'demo' ? ` sur ${sourceShortName(job.source)}` : ''}`} <ExternalLink className="h-4 w-4" />
           </LinkButton>
           <Button variant="secondary" size="md" className="h-11" onClick={onPrepare} title={spontaneous ? 'Générer un CV et une lettre de candidature spontanée pour cette entreprise' : 'Générer et relire un CV LaTeX et une lettre adaptés à cette offre'}>
             <FileText className="h-4 w-4" /> {spontaneous ? 'Préparer CV + lettre spontanée' : 'Préparer CV + lettre'}

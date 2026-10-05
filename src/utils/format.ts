@@ -55,6 +55,7 @@ export function sourceShortName(source: string): string {
   if (s.includes('hellowork')) return 'HelloWork';
   if (s.includes('france travail')) return 'France Travail';
   if (s.includes('bonne alternance')) return 'La bonne alternance';
+  if (s.startsWith('site carrière')) return 'Site carrière';
   return source.replace(/\s*\(.*\)\s*$/, '') || 'Source';
 }
 

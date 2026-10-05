@@ -42,9 +42,12 @@ Intégration continue : déplacez `ci/github-ci.yml` vers `.github/workflows/ci.
 | La bonne alternance | Offres en alternance + entreprises qui recrutent sans offre publiée (candidatures spontanées) | `LBA_API_KEY` |
 | JSearch (Google for Jobs) | Offres publiées sur LinkedIn, Indeed, Welcome to the Jungle, Glassdoor… | `JSEARCH_API_KEY` |
 | Adzuna | Agrégateur | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
+| Sites carrières | Offres publiées directement par les entreprises sur leur logiciel de recrutement (Greenhouse, Lever, Ashby, SmartRecruiters, Recruitee, Workday) : Doctolib, Qonto, Alan, Airbus, Thales, Sanofi, Ubisoft, ALTEN… | Aucune clé ; `ATS_SOURCES=off` pour désactiver, `ATS_COMPANIES_FILE` pour ajouter des entreprises |
 | Jooble | Agrégateur | `JOOBLE_API_KEY` (+ `JOOBLE_HOST=https://fr.jooble.org` pour une clé française) |
 
-Sans aucune clé, l'application fonctionne en mode démonstration (offres indicatives).
+Sans aucune clé, seuls les sites carrières sont interrogés (vraies offres). Avec `ATS_SOURCES=off` et aucune clé, l'application fonctionne en mode démonstration (offres indicatives).
+
+Sites carrières : chaque entreprise de l'annuaire (`server/careerSitesDirectory.ts`) est interrogée via l'API publique de son logiciel de recrutement. Seules les offres en France sont gardées, et le bouton « Postuler » mène à la page officielle de l'offre. Les sites qui renvoient toutes leurs offres d'un coup (Greenhouse, Lever, Ashby, Recruitee) sont mis en cache une heure. SmartRecruiters et Workday sont interrogés avec les mots-clés de la recherche. Pour ajouter une entreprise, il suffit de repérer l'ATS dans l'adresse de son bouton « Postuler » (format décrit en tête de l'annuaire).
 
 Fonctionnement :
 - les codes métier ROME sont trouvés automatiquement à partir du métier saisi (service de La bonne alternance) ;

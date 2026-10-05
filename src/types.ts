@@ -113,7 +113,7 @@ export interface DossierVersion {
   tailoredContent?: TailoredCv;
 }
 
-export type JobOrigin = 'la-bonne-alternance' | 'france-travail' | 'jsearch' | 'adzuna' | 'jooble' | 'demo' | 'ia-web';
+export type JobOrigin = 'la-bonne-alternance' | 'france-travail' | 'jsearch' | 'adzuna' | 'jooble' | 'site-carriere' | 'demo' | 'ia-web';
 
 export interface JobOffer {
   id: string;

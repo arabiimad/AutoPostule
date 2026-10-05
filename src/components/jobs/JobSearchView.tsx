@@ -472,6 +472,7 @@ export const JobSearchView: React.FC<JobSearchViewProps> = ({
 };
 
 const SOURCE_NAMES: Record<string, string> = {
+  careerSites: 'Sites carrières',
   laBonneAlternance: 'La bonne alternance',
   franceTravail: 'France Travail',
   jsearch: 'Google Jobs',

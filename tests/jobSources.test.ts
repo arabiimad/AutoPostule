@@ -35,6 +35,7 @@ const FT_OFFER = {
 
 beforeEach(() => {
   __clearCacheForTests();
+  process.env.ATS_SOURCES = 'off'; // sites carrières : testés dans careerSites.test.ts
   delete process.env.LBA_API_KEY;
   delete process.env.FT_CLIENT_ID;
   delete process.env.FT_CLIENT_SECRET;
