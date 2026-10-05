@@ -855,7 +855,7 @@ export async function searchRealJobs(params: SearchParams): Promise<RealSearchRe
     if (page > 1) skip("careerSites", "tous les résultats sont sur la première page");
     else plan.push({ key: "careerSites", run: async () => {
       const r = await searchCareerSites(params, geo);
-      if (r.late) warnings.push(`${r.late} site(s) carrière(s) répondent lentement : relancez la recherche pour ajouter leurs offres.`);
+      if (r.indexing) warnings.push(`Sites carrières : ${r.indexed}/${r.total} entreprises parcourues, la liste se complète. Relancez la recherche dans quelques minutes pour voir toutes leurs offres.`);
       return r.jobs;
     } });
   }

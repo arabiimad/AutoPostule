@@ -29,6 +29,7 @@ npm start                 # sert dist/ ; port = variable PORT (3000 par défaut)
 | `npm test` | Tests unitaires (sources, fusion des doublons, score, LaTeX, statistiques, import Word…) |
 | `npm run test:e2e` | Parcours complet dans un vrai navigateur, sources simulées (après `npm run build` et `npx playwright install chromium`) |
 | `npm run check:sources -- "développeur web" Lyon alternance` | Teste vos vraies clés d'API : offres par source, erreurs, avertissements |
+| `npm run discover:sites` | Cherche les sites carrières des entreprises françaises et met à jour l'annuaire (long : plusieurs dizaines de minutes la première fois) |
 | `npm run check:ai` | Teste la clé Gemini (modèles accessibles) et la génération d'un CV d'exemple |
 | `npm run deploy:rules` | Déploie les règles Firestore |
 
@@ -42,12 +43,16 @@ Intégration continue : déplacez `ci/github-ci.yml` vers `.github/workflows/ci.
 | La bonne alternance | Offres en alternance + entreprises qui recrutent sans offre publiée (candidatures spontanées) | `LBA_API_KEY` |
 | JSearch (Google for Jobs) | Offres publiées sur LinkedIn, Indeed, Welcome to the Jungle, Glassdoor… | `JSEARCH_API_KEY` |
 | Adzuna | Agrégateur | `ADZUNA_APP_ID`, `ADZUNA_APP_KEY` |
-| Sites carrières | Offres publiées directement par les entreprises sur leur logiciel de recrutement (Greenhouse, Lever, Ashby, SmartRecruiters, Recruitee, Workday) : Doctolib, Qonto, Alan, Airbus, Thales, Sanofi, Ubisoft, ALTEN… | Aucune clé ; `ATS_SOURCES=off` pour désactiver, `ATS_COMPANIES_FILE` pour ajouter des entreprises |
+| Sites carrières | Offres publiées directement par les entreprises sur leur logiciel de recrutement (Greenhouse, Lever, Ashby, SmartRecruiters, Recruitee, Teamtailor, Workday) : Doctolib, Qonto, Alan, Airbus, Thales, Sanofi, Ubisoft, ALTEN… | Aucune clé ; `ATS_SOURCES=off` pour désactiver, `ATS_COMPANIES_FILE` pour ajouter des entreprises |
 | Jooble | Agrégateur | `JOOBLE_API_KEY` (+ `JOOBLE_HOST=https://fr.jooble.org` pour une clé française) |
 
 Sans aucune clé, seuls les sites carrières sont interrogés (vraies offres). Avec `ATS_SOURCES=off` et aucune clé, l'application fonctionne en mode démonstration (offres indicatives).
 
-Sites carrières : chaque entreprise de l'annuaire (`server/careerSitesDirectory.ts`) est interrogée via l'API publique de son logiciel de recrutement. Seules les offres en France sont gardées, et le bouton « Postuler » mène à la page officielle de l'offre. Les sites qui renvoient toutes leurs offres d'un coup (Greenhouse, Lever, Ashby, Recruitee) sont mis en cache une heure. SmartRecruiters et Workday sont interrogés avec les mots-clés de la recherche. Pour ajouter une entreprise, il suffit de repérer l'ATS dans l'adresse de son bouton « Postuler » (format décrit en tête de l'annuaire).
+Sites carrières : un robot parcourt en tâche de fond tous les sites de l'annuaire via l'API publique de leur logiciel de recrutement. Il garde les offres en France dans un index en mémoire, sauvegardé dans `.cache/career-index.json` pour que le serveur redémarre avec ses offres. Chaque site est mis à jour toutes les 3 h, et la recherche filtre l'index sans appel externe. Au tout premier démarrage, l'index se remplit en quelques minutes : les premières recherches affichent un avertissement en attendant. « Postuler » mène toujours à la page officielle de l'offre.
+
+L'annuaire a deux parties :
+- `server/data/careerSites.generated.ts` est produit par `npm run discover:sites`. Le script liste les entreprises françaises (API publique Recherche d'entreprises : grandes entreprises, ETI, PME du numérique et du conseil, plus des marques connues), essaie leurs identifiants sur Greenhouse, Lever, Ashby, SmartRecruiters, Recruitee et Teamtailor, et ne garde que les sites qui ont des offres en France. Il est à relancer de temps en temps ; les réponses sont mises en cache dans `.cache/career-sites/`.
+- `server/careerSitesDirectory.ts` contient les entrées vérifiées à la main, dont les sites Workday, qui ne se devinent pas.
 
 Fonctionnement :
 - les codes métier ROME sont trouvés automatiquement à partir du métier saisi (service de La bonne alternance) ;

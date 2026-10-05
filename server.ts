@@ -7,6 +7,7 @@ import { COMPREHENSIVE_REAL_JOBS } from "./src/realJobsData.ts";
 import { filterJobs } from "./src/utils/jobFilter.ts";
 import { calculateCandidateMatch } from "./src/utils/skillMatcher.ts";
 import { searchRealJobs, hasRealSources, getSourceStatus } from "./server/jobSources.ts";
+import { startCareerSitesIndexer, careerSitesIndexStatus, careerSitesEnabled } from "./server/careerSites.ts";
 import { generateFallbackLatex, normalizeTemplate, templateInstructions, compileLatex, detectLatexCompiler, TEMPLATES } from "./server/latex.ts";
 import { authMiddleware, getAuthMode } from "./server/auth.ts";
 import { extractTextFromDocx } from "./server/docx.ts";
@@ -517,7 +518,7 @@ RÈGLES D'OR ABSOLUES :
   //    - sources réelles (La bonne alternance, France Travail) si des clés sont configurées ;
   //    - sinon base de démonstration (+ recherche web IA facultative, signalée comme telle).
   app.get("/api/jobs/sources", async (req, res) => {
-    res.json({ ...getSourceStatus(), mode: hasRealSources() ? "live" : "demo", storage: kv().kind, quotas: await getQuotaUsage() });
+    res.json({ ...getSourceStatus(), mode: hasRealSources() ? "live" : "demo", storage: kv().kind, quotas: await getQuotaUsage(), careerSitesIndex: careerSitesEnabled() ? careerSitesIndexStatus() : null });
   });
 
   const handleJobSearch = async (req: any, res: any) => {
@@ -983,6 +984,8 @@ Analyse avec la méthode STAR. Renvoie uniquement un JSON valide :
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
     logEvent("info", "server_started", { port: PORT, mode: isProduction ? "production" : "development", storage: kv().kind, sources: getSourceStatus() });
+    // Sites carrières : le robot remplit l'index en tâche de fond (offres disponibles sans attendre la première recherche)
+    startCareerSitesIndexer();
   });
 }
 

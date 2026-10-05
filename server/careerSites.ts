@@ -3,25 +3,38 @@
  *
  * La plupart des entreprises publient leurs offres via un logiciel de recrutement (ATS) qui expose
  * une API publique, sans clé, destinée à afficher ces offres sur leur site : Greenhouse, Lever, Ashby,
- * SmartRecruiters, Recruitee, Workday. On interroge ces API pour chaque entreprise de l'annuaire
- * (server/careerSitesDirectory.ts) et on renvoie vers la page officielle pour postuler.
+ * SmartRecruiters, Recruitee, Teamtailor, Workday. Un robot parcourt en tâche de fond tous les sites de
+ * l'annuaire (server/careerSitesDirectory.ts) et garde leurs offres en France dans un index en mémoire,
+ * sauvegardé sur disque ; la recherche filtre cet index. « Postuler » mène à la page officielle de l'offre.
  *
- * Désactivation : ATS_SOURCES=off. Annuaire complémentaire : ATS_COMPANIES_FILE (JSON).
+ * Variables : ATS_SOURCES=off (désactiver), ATS_COMPANIES_FILE (entreprises en plus, JSON),
+ * ATS_INDEX_FILE (index sauvegardé, « off » pour ne pas l'écrire), ATS_REFRESH_MINUTES, ATS_CONCURRENCY.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import type { JobOffer, ContractType } from "../src/types.ts";
-import { CAREER_SITES, type AtsCompany, type AtsKind } from "./careerSitesDirectory.ts";
+import { CAREER_SITES, DISCOVERED_CAREER_SITES, type AtsCompany, type AtsKind } from "./careerSitesDirectory.ts";
 import {
-  cached, sourceFetch, stripHtml, inferContract, inferRemote, deriveSkills, isRelevant, queryWords,
+  sourceFetch, stripHtml, inferContract, inferRemote, deriveSkills, queryWords,
   type SearchParams, type GeoPoint
 } from "./jobSources.ts";
 
-/** Durée de cache d'un site carrière complet (ses offres changent peu d'une heure à l'autre). */
-const BOARD_TTL_MS = 60 * 60_000;
-/** Délai d'attente par site avant d'afficher les autres résultats (le site continue de remplir le cache). */
-const COMPANY_WAIT_MS = Number(process.env.ATS_WAIT_MS) || 10_000;
-const MAX_RESULTS = 150;
-const MAX_DESCRIPTION = 6000;
+/** Fréquence de mise à jour d'un site (les offres changent peu d'une heure à l'autre). */
+const REFRESH_MS = (Number(process.env.ATS_REFRESH_MINUTES) || 180) * 60_000;
+/** Un site en erreur est réessayé plus tôt. */
+const RETRY_MS = 30 * 60_000;
+const CHECK_EVERY_MS = 15 * 60_000;
+/** Index sauvegardé sur disque : réutilisé au redémarrage s'il a moins de 24 h. */
+const SNAPSHOT_MAX_AGE_MS = 24 * 3600_000;
+/** Attente maximale du premier parcours lors d'une recherche (la suite arrive aux recherches suivantes). */
+const FIRST_WAIT_MS = Number(process.env.ATS_WAIT_MS) || 8_000;
+/** Sites interrogés en parallèle par le robot. */
+const CONCURRENCY = Number(process.env.ATS_CONCURRENCY) || 12;
+/** Offres en France gardées au plus par entreprise (SmartRecruiters, Workday : plusieurs milliers). */
+const MAX_PER_COMPANY = 1000;
+const MAX_RESULTS = 200;
+/** Description gardée dans l'index (mémoire) ; au-delà, l'offre est marquée « extrait » et renvoie au site. */
+const MAX_DESCRIPTION = Number(process.env.ATS_DESCRIPTION_CHARS) || 2000;
 /** Identifiant du pays « France » dans Workday (commun à tous les sites). */
 const WORKDAY_FRANCE = "54c5b6971ffb4bf0b116fe7651ec789a";
 
@@ -31,6 +44,7 @@ const ATS_LABELS: Record<AtsKind, string> = {
   ashby: "Ashby",
   smartrecruiters: "SmartRecruiters",
   recruitee: "Recruitee",
+  teamtailor: "Teamtailor",
   workday: "Workday"
 };
 
@@ -39,7 +53,9 @@ export function careerSitesEnabled(): boolean {
 }
 
 let extraCompanies: AtsCompany[] | null = null;
+let testCompanies: AtsCompany[] | null = null;
 export function careerSiteCompanies(): AtsCompany[] {
+  if (testCompanies) return testCompanies;
   if (extraCompanies === null) {
     extraCompanies = [];
     const file = process.env.ATS_COMPANIES_FILE;
@@ -52,15 +68,11 @@ export function careerSiteCompanies(): AtsCompany[] {
       }
     }
   }
-  const all = [...CAREER_SITES, ...extraCompanies];
-  // Une entreprise ajoutée dans le fichier remplace celle de l'annuaire par défaut
+  const all = [...DISCOVERED_CAREER_SITES.map(({ name, ats, slug }) => ({ name, ats, slug })), ...CAREER_SITES, ...extraCompanies];
+  // Les entrées vérifiées à la main, puis celles du fichier, remplacent celles trouvées automatiquement
   const byKey = new Map(all.map((c) => [`${c.ats}:${c.slug.toLowerCase()}`, c]));
   return Array.from(byKey.values());
 }
-export function __resetCareerSitesForTests() {
-  extraCompanies = null;
-}
-
 // ---------------------------------------------------------------------------
 // Utilitaires
 // ---------------------------------------------------------------------------
@@ -121,8 +133,10 @@ export function workdayPostedOn(text: string, now = Date.now()): string {
 
 function base(company: AtsCompany, id: string | number, partial: Omit<JobOffer, "id" | "company" | "source" | "origin" | "status" | "skillsRequired"> & { skills?: string[] }): JobOffer {
   const { skills, ...rest } = partial;
+  const clipped = rest.description.length > MAX_DESCRIPTION && rest.description.endsWith("…");
   return {
     ...rest,
+    descriptionIsSnippet: rest.descriptionIsSnippet || clipped || undefined,
     id: `ats-${company.ats}-${company.slug.toLowerCase()}-${id}`,
     company: company.name,
     source: `Site carrière ${company.name} (${ATS_LABELS[company.ats]})`,
@@ -217,6 +231,43 @@ export function normalizeRecruiteeJob(o: any, company: AtsCompany): JobOffer | n
   });
 }
 
+/** Contenu d'une balise d'un flux RSS (CDATA et échappement HTML retirés). */
+function rssTag(xml: string, tag: string): string {
+  const m = xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`));
+  return (m?.[1] || "").replace(/^<!\[CDATA\[|\]\]>$/g, "").trim();
+}
+
+/** Teamtailor : flux RSS public ({slug}.teamtailor.com/jobs.rss), une entrée <item> par offre. */
+export function parseTeamtailorRss(xml: string, company: AtsCompany): JobOffer[] {
+  return String(xml || "")
+    .split("<item>")
+    .slice(1)
+    .map((item) => normalizeTeamtailorItem(item.split("</item>")[0], company))
+    .filter(Boolean) as JobOffer[];
+}
+
+export function normalizeTeamtailorItem(item: string, company: AtsCompany): JobOffer | null {
+  const title = stripHtml(rssTag(item, "title"));
+  const link = rssTag(item, "link");
+  if (!title || !/^https?:\/\//.test(link)) return null;
+  const locations = item.split("<tt:location>").slice(1).map((l) => ({ city: stripHtml(rssTag(l, "tt:city")), country: stripHtml(rssTag(l, "tt:country")) }));
+  if (locations.length && !locations.some((l) => /france/i.test(l.country) || looksFrench(l.city))) return null;
+  if (!locations.length && !looksFrench(title)) return null;
+  const cities = Array.from(new Set(locations.filter((l) => /france/i.test(l.country) || looksFrench(l.city)).map((l) => l.city).filter(Boolean)));
+  const location = cities.join(" · ") || "France";
+  const id = rssTag(item, "guid") || link.split("/").pop() || link;
+  return base(company, id, {
+    title,
+    location,
+    contractType: contractFrom(title, ""),
+    remote: remoteFrom(rssTag(item, "remoteStatus"), title, location),
+    description: clip(stripHtml(decodeEscapedHtml(rssTag(item, "description")))),
+    applyUrl: link,
+    publishedAt: iso(rssTag(item, "pubDate")) || new Date().toISOString(),
+    domain: stripHtml(rssTag(item, "tt:department")) || undefined
+  });
+}
+
 /** SmartRecruiters : la liste ne contient pas la description (extrait = fonction et service). */
 export function normalizeSmartRecruitersJob(p: any, company: AtsCompany): JobOffer | null {
   if (!p?.name || !p?.id) return null;
@@ -263,63 +314,69 @@ export function normalizeWorkdayJob(j: any, company: AtsCompany, now = Date.now(
 }
 
 // ---------------------------------------------------------------------------
-// Récupération
+// Récupération : toutes les offres en France d'un site carrière
 // ---------------------------------------------------------------------------
 async function getJson(url: string, init?: any): Promise<any> {
-  const res = await sourceFetch(url, { ...init, headers: { Accept: "application/json", ...(init?.headers || {}) } });
+  const res = await sourceFetch(url, { timeoutMs: 20_000, ...init, headers: { Accept: "application/json", ...(init?.headers || {}) } });
   if (res.status === 404) throw new Error("site carrière introuvable");
   if (!res.ok) throw new Error(`erreur ${res.status}`);
   return res.json();
 }
 
-/** Sites qui renvoient toutes leurs offres d'un coup : on garde la liste France en cache une heure. */
-async function fetchBoard(company: AtsCompany): Promise<JobOffer[]> {
+export async function fetchCompanyJobs(company: AtsCompany): Promise<JobOffer[]> {
   const slug = encodeURIComponent(company.slug);
-  return cached(`ats:${company.ats}:${company.slug}`, async () => {
-    switch (company.ats) {
-      case "greenhouse": {
-        const d = await getJson(`https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`);
-        return (d?.jobs || []).map((j: any) => normalizeGreenhouseJob(j, company)).filter(Boolean);
-      }
-      case "lever": {
-        const d = await getJson(`https://api.lever.co/v0/postings/${slug}?mode=json`);
-        return (Array.isArray(d) ? d : []).map((j: any) => normalizeLeverJob(j, company)).filter(Boolean);
-      }
-      case "ashby": {
-        const d = await getJson(`https://api.ashbyhq.com/posting-api/job-board/${slug}?includeCompensation=true`);
-        return (d?.jobs || []).map((j: any) => normalizeAshbyJob(j, company)).filter(Boolean);
-      }
-      case "recruitee": {
-        const d = await getJson(`https://${slug}.recruitee.com/api/offers/`);
-        return (d?.offers || []).map((o: any) => normalizeRecruiteeJob(o, company)).filter(Boolean);
-      }
-      default:
-        return [];
+  const keep = (list: any[], normalize: (x: any) => JobOffer | null) => list.map(normalize).filter(Boolean) as JobOffer[];
+  switch (company.ats) {
+    case "greenhouse": {
+      const d = await getJson(`https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`);
+      return keep(d?.jobs || [], (j) => normalizeGreenhouseJob(j, company));
     }
-  }, BOARD_TTL_MS) as Promise<JobOffer[]>;
-}
-
-/** Sites avec recherche côté serveur (catalogues de plusieurs milliers d'offres). */
-async function searchCompany(company: AtsCompany, query: string): Promise<JobOffer[]> {
-  if (company.ats === "smartrecruiters") {
-    const qs = new URLSearchParams({ country: "fr", limit: "100" });
-    if (query) qs.set("q", query);
-    const url = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(company.slug)}/postings?${qs}`;
-    return cached(`ats:${url}`, async () => {
-      const d = await getJson(url);
-      return (d?.content || []).map((p: any) => normalizeSmartRecruitersJob(p, company)).filter(Boolean);
-    }, BOARD_TTL_MS) as Promise<JobOffer[]>;
+    case "lever": {
+      const d = await getJson(`https://api.lever.co/v0/postings/${slug}?mode=json`);
+      return keep(Array.isArray(d) ? d : [], (j) => normalizeLeverJob(j, company));
+    }
+    case "ashby": {
+      const d = await getJson(`https://api.ashbyhq.com/posting-api/job-board/${slug}?includeCompensation=true`);
+      return keep(d?.jobs || [], (j) => normalizeAshbyJob(j, company));
+    }
+    case "recruitee": {
+      const d = await getJson(`https://${slug}.recruitee.com/api/offers/`);
+      return keep(d?.offers || [], (o) => normalizeRecruiteeJob(o, company));
+    }
+    case "teamtailor": {
+      const res = await sourceFetch(`https://${slug}.teamtailor.com/jobs.rss`, { timeoutMs: 20_000, headers: { Accept: "application/rss+xml, application/xml" } });
+      if (res.status === 404) throw new Error("site carrière introuvable");
+      if (!res.ok) throw new Error(`erreur ${res.status}`);
+      return parseTeamtailorRss(await res.text(), company);
+    }
+    case "smartrecruiters": {
+      const out: JobOffer[] = [];
+      for (let offset = 0; offset < MAX_PER_COMPANY; offset += 100) {
+        const d = await getJson(`https://api.smartrecruiters.com/v1/companies/${slug}/postings?country=fr&limit=100&offset=${offset}`);
+        const page = d?.content || [];
+        out.push(...keep(page, (p) => normalizeSmartRecruitersJob(p, company)));
+        if (page.length < 100 || offset + 100 >= (d?.totalFound || 0)) break;
+      }
+      return out;
+    }
+    case "workday": {
+      if (!company.workday) return [];
+      const { host, site, countryFacet = "locationCountry" } = company.workday;
+      const url = `https://${host}.myworkdayjobs.com/wday/cxs/${slug}/${encodeURIComponent(site)}/jobs`;
+      const facets = countryFacet === "none" ? {} : { [countryFacet]: [WORKDAY_FRANCE] };
+      const out: JobOffer[] = [];
+      const now = Date.now();
+      for (let offset = 0; offset < MAX_PER_COMPANY; offset += 20) {
+        const d = await getJson(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ limit: 20, offset, searchText: "", appliedFacets: facets }) });
+        const page = d?.jobPostings || [];
+        out.push(...keep(page, (j) => normalizeWorkdayJob(j, company, now)));
+        if (page.length < 20 || offset + 20 >= (d?.total || 0)) break;
+      }
+      return out;
+    }
+    default:
+      return [];
   }
-  if (company.ats === "workday" && company.workday) {
-    const { host, site, countryFacet = "locationCountry" } = company.workday;
-    const url = `https://${host}.myworkdayjobs.com/wday/cxs/${encodeURIComponent(company.slug)}/${encodeURIComponent(site)}/jobs`;
-    const body = { limit: 20, offset: 0, searchText: query, appliedFacets: { [countryFacet]: [WORKDAY_FRANCE] } };
-    return cached(`ats:${url}:${query}`, async () => {
-      const d = await getJson(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      return (d?.jobPostings || []).map((j: any) => normalizeWorkdayJob(j, company)).filter(Boolean);
-    }, BOARD_TTL_MS) as Promise<JobOffer[]>;
-  }
-  return fetchBoard(company);
 }
 
 // ---------------------------------------------------------------------------
@@ -346,10 +403,134 @@ export function inArea(job: JobOffer, geo: GeoPoint | null, radiusKm = 30): bool
   return false;
 }
 
-/** Pertinence sur l'intitulé et le service (les descriptions complètes citent tous les métiers de l'entreprise). */
-function matchesQuery(job: JobOffer, query: string): boolean {
-  if (!queryWords(query).length) return true;
-  return isRelevant({ ...job, description: `${job.domain || ""}` }, query);
+/**
+ * Pertinence sur l'intitulé et le service (les descriptions complètes citent tous les métiers de l'entreprise).
+ * Même règle que isRelevant (au moins la moitié des mots, racine de 5 lettres), préparée une fois par recherche.
+ */
+const haystacks = new WeakMap<JobOffer, string>();
+function queryMatcher(query: string): (job: JobOffer) => boolean {
+  const stems = queryWords(query).filter((w) => w.length > 2).map((w) => (w.length > 6 ? w.slice(0, 5) : w));
+  if (!stems.length) return () => true;
+  const needed = Math.ceil(stems.length / 2);
+  return (job) => {
+    let hay = haystacks.get(job);
+    if (hay === undefined) {
+      hay = norm(`${job.title} ${job.domain || ""}`);
+      haystacks.set(job, hay);
+    }
+    let hits = 0;
+    for (const w of stems) if (hay.includes(w) && ++hits >= needed) return true;
+    return false;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Index : un robot parcourt tous les sites en tâche de fond, la recherche filtre l'index en mémoire
+// ---------------------------------------------------------------------------
+interface IndexEntry { jobs: JobOffer[]; fetchedAt: number; error?: string }
+const index = new Map<string, IndexEntry>();
+const keyOf = (c: AtsCompany) => `${c.ats}:${c.slug.toLowerCase()}`;
+let crawling: Promise<void> | null = null;
+let firstPassDone = false;
+let lastCrawlAt = 0;
+let timer: ReturnType<typeof setInterval> | null = null;
+
+function indexFile(): string | null {
+  const f = process.env.ATS_INDEX_FILE ?? ".cache/career-index.json";
+  return f && f !== "off" ? f : null;
+}
+
+function loadSnapshot() {
+  const file = indexFile();
+  if (!file || !existsSync(file)) return;
+  try {
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    const known = new Set(careerSiteCompanies().map(keyOf));
+    for (const [k, v] of Object.entries<IndexEntry>(data?.entries || {})) {
+      if (known.has(k) && Date.now() - v.fetchedAt < SNAPSHOT_MAX_AGE_MS) index.set(k, v);
+    }
+    if (index.size) firstPassDone = true;
+  } catch {
+    /* index illisible : il sera reconstruit */
+  }
+}
+
+function saveSnapshot() {
+  const file = indexFile();
+  if (!file) return;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ savedAt: Date.now(), entries: Object.fromEntries(index) }));
+  } catch (e: any) {
+    console.warn(`Index des sites carrières non sauvegardé : ${e?.message || e}`);
+  }
+}
+
+/** Met à jour les sites dont l'index a plus de REFRESH_MS (tous au premier passage). */
+export function crawlCareerSites(force = false): Promise<void> {
+  if (crawling) return crawling;
+  crawling = (async () => {
+    const companies = careerSiteCompanies().filter((c) => {
+      const e = index.get(keyOf(c));
+      return force || !e || Date.now() - e.fetchedAt > (e.error ? RETRY_MS : REFRESH_MS);
+    });
+    let next = 0;
+    let sinceSave = 0;
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, companies.length) }, async () => {
+      while (next < companies.length) {
+        const c = companies[next++];
+        const k = keyOf(c);
+        try {
+          index.set(k, { jobs: await fetchCompanyJobs(c), fetchedAt: Date.now() });
+        } catch (e: any) {
+          const prev = index.get(k);
+          // On garde les offres déjà connues en cas de panne passagère
+          index.set(k, { jobs: prev?.jobs || [], fetchedAt: Date.now(), error: String(e?.message || e) });
+        }
+        if (++sinceSave >= 200) { sinceSave = 0; saveSnapshot(); }
+      }
+    }));
+    firstPassDone = true;
+    lastCrawlAt = Date.now();
+    saveSnapshot();
+  })().finally(() => { crawling = null; });
+  return crawling;
+}
+
+/** Démarre le robot (au lancement du serveur ou à la première recherche) et le relance régulièrement. */
+export function startCareerSitesIndexer() {
+  if (timer || !careerSitesEnabled()) return;
+  loadSnapshot();
+  void crawlCareerSites();
+  timer = setInterval(() => void crawlCareerSites(), CHECK_EVERY_MS);
+  timer.unref?.();
+}
+
+export function careerSitesIndexStatus() {
+  const entries = Array.from(index.values());
+  return {
+    companies: careerSiteCompanies().length,
+    indexed: entries.length,
+    failed: entries.filter((e) => e.error).length,
+    jobs: entries.reduce((n, e) => n + e.jobs.length, 0),
+    crawling: !!crawling,
+    lastCrawlAt: lastCrawlAt ? new Date(lastCrawlAt).toISOString() : null
+  };
+}
+
+/** Tests : annuaire réduit (null = annuaire réel). */
+export function __setCareerSitesForTests(list: AtsCompany[] | null) {
+  testCompanies = list;
+}
+
+export function __resetCareerSitesForTests() {
+  extraCompanies = null;
+  testCompanies = null;
+  index.clear();
+  firstPassDone = false;
+  lastCrawlAt = 0;
+  if (timer) clearInterval(timer);
+  timer = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -357,34 +538,32 @@ function matchesQuery(job: JobOffer, query: string): boolean {
 // ---------------------------------------------------------------------------
 export interface CareerSitesResult {
   jobs: JobOffer[];
-  /** Sites qui ont échoué (erreur) ou trop lents (résultats à la prochaine recherche). */
-  failed: number;
-  late: number;
+  /** Sites indexés / sites de l'annuaire (l'index se remplit au démarrage du serveur). */
+  indexed: number;
   total: number;
+  /** Premier parcours encore en cours. */
+  indexing: boolean;
 }
 
 export async function searchCareerSites(params: SearchParams, geo: GeoPoint | null): Promise<CareerSitesResult> {
-  const query = (params.query || "").trim();
+  startCareerSitesIndexer();
+  // Premier démarrage sans index sauvegardé : on attend un peu le robot, la suite arrivera à la prochaine recherche
+  if (!firstPassDone && crawling) {
+    let t: any;
+    await Promise.race([crawling, new Promise((r) => { t = setTimeout(r, FIRST_WAIT_MS); })]);
+    clearTimeout(t);
+  }
   const companies = careerSiteCompanies();
-  let failed = 0, late = 0;
+  const entries = companies.map((c) => index.get(keyOf(c))).filter(Boolean) as IndexEntry[];
+  if (entries.length && entries.every((e) => e.error && !e.jobs.length)) throw new Error("aucun site carrière n'a répondu");
 
-  const perCompany = companies.map(async (company) => {
-    let timer: any;
-    const work = searchCompany(company, query).catch(() => { failed++; return [] as JobOffer[]; });
-    const timeout = new Promise<JobOffer[]>((resolve) => { timer = setTimeout(() => { late++; resolve([]); }, COMPANY_WAIT_MS); });
-    try {
-      return await Promise.race([work, timeout]);
-    } finally {
-      clearTimeout(timer);
-    }
-  });
-  const lists = await Promise.all(perCompany);
-  if (companies.length && failed === companies.length) throw new Error("aucun site carrière n'a répondu");
-
-  const jobs = lists
-    .flat()
-    .filter((j) => matchesQuery(j, query) && inArea(j, geo, params.radius))
+  const query = (params.query || "").trim();
+  const contract = (params.contractType || "tous").toLowerCase();
+  const matches = queryMatcher(query);
+  const jobs = entries
+    .flatMap((e) => e.jobs)
+    .filter((j) => (contract === "tous" || j.contractType === contract) && matches(j) && inArea(j, geo, params.radius))
     .sort((a, b) => (Date.parse(b.publishedAt) || 0) - (Date.parse(a.publishedAt) || 0))
     .slice(0, MAX_RESULTS);
-  return { jobs, failed, late, total: companies.length };
+  return { jobs, indexed: entries.length, total: companies.length, indexing: !firstPassDone || (!!crawling && entries.length < companies.length) };
 }

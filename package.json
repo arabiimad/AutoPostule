@@ -15,7 +15,8 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "check:sources": "node --import tsx scripts/check-sources.ts",
     "test:e2e": "node e2e/run.mjs",
-    "check:ai": "node --import tsx scripts/check-ai.ts"
+    "check:ai": "node --import tsx scripts/check-ai.ts",
+    "discover:sites": "node --import tsx scripts/discover-career-sites.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
