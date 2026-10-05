@@ -1,0 +1,20 @@
+{
+  // GitHub Codespaces : l'application démarre toute seule et s'ouvre dans le navigateur
+  // (adresse privée, accessible seulement avec votre compte GitHub).
+  // Clés facultatives (GEMINI_API_KEY, FT_CLIENT_ID…) : GitHub → Settings → Codespaces → Secrets.
+  "name": "AutoPostule",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+  "hostRequirements": { "cpus": 2, "memory": "4gb" },
+  "postCreateCommand": "npm install",
+  "postAttachCommand": {
+    "app": "npm run dev"
+  },
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "AutoPostule", "onAutoForward": "openBrowser" }
+  },
+  "containerEnv": {
+    "AUTH_MODE": "optional",
+    "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1"
+  }
+}
