@@ -160,7 +160,7 @@ async function probe(ats: AtsKind, slug: string): Promise<Probe | null> {
       return { jobs: d.offers.filter((o: any) => normalizeRecruiteeJob(o, company)).length, name: d.offers[0]?.company_name };
     }
     case "teamtailor": {
-      const res = await fetchRetry(`https://${s}.teamtailor.com/jobs.rss`);
+      const res = await fetchRetry(`https://${s}.teamtailor.com/jobs.rss?per_page=1000`);
       if (!res || !res.ok) return null;
       const xml = await res.text();
       const name = xml.match(/<channel>\s*<title>([^<]*)<\/title>/)?.[1];
@@ -181,6 +181,7 @@ async function pool<T>(items: T[], n: number, run: (item: T, i: number) => Promi
   }));
 }
 
+const decode = (s: string) => s.replace(/&amp;/g, "&").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
 const pretty = (s: string) => s.toLowerCase().replace(/(^|[\s\-'’])(\p{L})/gu, (_, p, l) => p + l.toUpperCase());
 
 async function main() {
@@ -223,9 +224,27 @@ async function main() {
       if (strict && !(NAMED.has(ats) && nameMatches(r.name, c))) continue;
       if (!strict && NAMED.has(ats) && r.name && !nameMatches(r.name, c) && r.name.toLowerCase() !== slug) continue;
       const key = `${ats}:${slug}`;
-      if (!result.has(key)) result.set(key, { name: r.name && nameMatches(r.name, c) ? r.name.trim() : pretty(c.name), ats, slug, jobs: r.jobs });
+      if (!result.has(key)) result.set(key, { name: r.name && nameMatches(r.name, c) ? decode(r.name).trim() : pretty(c.name), ats, slug, jobs: r.jobs });
     }
   }
+  // Lever et Ashby ne donnent pas le nom de l'entreprise dans leur API : on lit celui de la page carrière
+  // (le nom deviné depuis la base des entreprises pourrait être celui d'une autre société au même identifiant)
+  const titlesFile = join(WORK_DIR, "titles.json");
+  const titles: Record<string, string | null> = existsSync(titlesFile) ? JSON.parse(readFileSync(titlesFile, "utf8")) : {};
+  const unnamed = Array.from(result.values()).filter((c) => c.ats === "lever" || c.ats === "ashby");
+  await pool(unnamed, 8, async (c) => {
+    const key = `${c.ats}:${c.slug}`;
+    if (!(key in titles)) {
+      const url = c.ats === "lever" ? `https://jobs.lever.co/${encodeURIComponent(c.slug)}` : `https://jobs.ashbyhq.com/${encodeURIComponent(c.slug)}`;
+      const res = await fetchRetry(url);
+      const html = res?.ok ? await res.text().catch(() => "") : "";
+      titles[key] = html.match(/<title>([^<]+)<\/title>/)?.[1]?.replace(/\s+(Jobs|Careers|Carrières)\s*$/i, "").trim() || null;
+    }
+    const t = titles[key];
+    if (t) c.name = decode(t);
+  });
+  writeFileSync(titlesFile, JSON.stringify(titles));
+
   const list = Array.from(result.values()).sort((a, b) => b.jobs - a.jobs);
   mkdirSync(dirname(OUT), { recursive: true });
   const rows = list.map(({ name, ats, slug, jobs }) => `  ${JSON.stringify({ name, ats, slug, jobs })}`).join(",\n");

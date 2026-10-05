@@ -218,6 +218,18 @@ test('index sauvegardé sur disque et rechargé au démarrage', async () => {
   __resetCareerSitesForTests();
 });
 
+test('une offre publiée sur deux ATS de la même entreprise n\'apparaît qu\'une fois', async () => {
+  process.env.ATS_INDEX_FILE = 'off';
+  const ashbyQonto: AtsCompany = { name: 'Qonto', ats: 'ashby', slug: 'qonto' };
+  __setCareerSitesForTests([LEVER_CO, ashbyQonto]);
+  mockAts([], (url) => (url.includes('ashbyhq') ? ok({ jobs: [{ ...ASHBY, id: 'q1', title: 'Développeur Backend Go', location: 'Paris' }] }) : undefined));
+  await crawlCareerSites();
+  assert.equal(careerSitesIndexStatus().jobs, 2);
+  const r = await searchCareerSites({ query: 'backend' }, null);
+  assert.equal(r.jobs.length, 1);
+  __resetCareerSitesForTests();
+});
+
 test('searchRealJobs : sites carrières actifs sans clé, désactivables, offre officielle prioritaire', async () => {
   process.env.ATS_INDEX_FILE = 'off';
   __setCareerSitesForTests([GH_CO, LEVER_CO]);

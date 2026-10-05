@@ -237,7 +237,7 @@ function rssTag(xml: string, tag: string): string {
   return (m?.[1] || "").replace(/^<!\[CDATA\[|\]\]>$/g, "").trim();
 }
 
-/** Teamtailor : flux RSS public ({slug}.teamtailor.com/jobs.rss), une entrée <item> par offre. */
+/** Teamtailor : flux RSS public ({slug}.teamtailor.com/jobs.rss, 100 offres par défaut, per_page pour tout avoir). */
 export function parseTeamtailorRss(xml: string, company: AtsCompany): JobOffer[] {
   return String(xml || "")
     .split("<item>")
@@ -344,7 +344,7 @@ export async function fetchCompanyJobs(company: AtsCompany): Promise<JobOffer[]>
       return keep(d?.offers || [], (o) => normalizeRecruiteeJob(o, company));
     }
     case "teamtailor": {
-      const res = await sourceFetch(`https://${slug}.teamtailor.com/jobs.rss`, { timeoutMs: 20_000, headers: { Accept: "application/rss+xml, application/xml" } });
+      const res = await sourceFetch(`https://${slug}.teamtailor.com/jobs.rss?per_page=1000`, { timeoutMs: 20_000, headers: { Accept: "application/rss+xml, application/xml" } });
       if (res.status === 404) throw new Error("site carrière introuvable");
       if (!res.ok) throw new Error(`erreur ${res.status}`);
       return parseTeamtailorRss(await res.text(), company);
@@ -449,7 +449,10 @@ function loadSnapshot() {
     for (const [k, v] of Object.entries<IndexEntry>(data?.entries || {})) {
       if (known.has(k) && Date.now() - v.fetchedAt < SNAPSHOT_MAX_AGE_MS) index.set(k, v);
     }
-    if (index.size) firstPassDone = true;
+    if (index.size) {
+      firstPassDone = true;
+      lastCrawlAt = Number(data?.savedAt) || 0;
+    }
   } catch {
     /* index illisible : il sera reconstruit */
   }
@@ -536,6 +539,18 @@ export function __resetCareerSitesForTests() {
 // ---------------------------------------------------------------------------
 // Recherche
 // ---------------------------------------------------------------------------
+/** Une même offre publiée sur deux ATS de l'entreprise (migration Lever → Ashby…) n'est gardée qu'une fois. */
+function firstOfEachOffer(): (job: JobOffer) => boolean {
+  const seen = new Set<string>();
+  const companyKey = (c: string) => norm(c).replace(/\b(sas|sa|france|group|groupe)\b/g, "").replace(/[^a-z0-9]/g, "");
+  return (job) => {
+    const k = `${companyKey(job.company)}|${norm(job.title).replace(/[^a-z0-9]/g, "")}|${norm(job.location).replace(/[^a-z]/g, "")}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  };
+}
+
 export interface CareerSitesResult {
   jobs: JobOffer[];
   /** Sites indexés / sites de l'annuaire (l'index se remplit au démarrage du serveur). */
@@ -564,6 +579,7 @@ export async function searchCareerSites(params: SearchParams, geo: GeoPoint | nu
     .flatMap((e) => e.jobs)
     .filter((j) => (contract === "tous" || j.contractType === contract) && matches(j) && inArea(j, geo, params.radius))
     .sort((a, b) => (Date.parse(b.publishedAt) || 0) - (Date.parse(a.publishedAt) || 0))
+    .filter(firstOfEachOffer())
     .slice(0, MAX_RESULTS);
   return { jobs, indexed: entries.length, total: companies.length, indexing: !firstPassDone || (!!crawling && entries.length < companies.length) };
 }
