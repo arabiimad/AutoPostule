@@ -19,6 +19,30 @@ npm run build             # interface (dist/) + serveur (dist/server.cjs)
 npm start                 # sert dist/ ; port = variable PORT (3000 par défaut)
 ```
 
+## Mettre en ligne
+
+L'application est un serveur Node unique (interface + API). Elle a besoin d'un serveur **toujours allumé** : le robot des sites carrières indexe les offres en tâche de fond. Un `Dockerfile` est fourni ; il inclut Chromium pour l'export PDF.
+
+### Render (le plus simple, depuis GitHub)
+1. Fusionner les changements dans `main` sur GitHub.
+2. Sur https://render.com : **New → Blueprint**, puis choisir ce dépôt. Le fichier `render.yaml` crée le service, avec un disque de 1 Go pour l'index des sites carrières.
+3. Renseigner les clés demandées (toutes facultatives : `GEMINI_API_KEY`, `FT_CLIENT_ID`…), puis valider.
+4. L'adresse publique s'affiche (`https://autopostule-xxxx.onrender.com`). Au premier démarrage, les sites carrières se remplissent en 5 minutes environ.
+
+Plan `starter` (environ 7 $/mois + 0,25 $/mois pour le disque). Le plan gratuit fonctionne aussi (`plan: free`, sans la section `disk`), mais il s'endort après 15 minutes sans visite : l'index repart de zéro à chaque réveil.
+
+### Autres hébergeurs (Railway, Fly.io, Cloud Run, VPS…)
+N'importe quel hébergeur de conteneurs Docker convient :
+```bash
+docker build -t autopostule .
+docker run -p 3000:3000 -v autopostule-cache:/app/.cache --env-file .env autopostule
+```
+- Port : variable `PORT` (3000 par défaut).
+- Disque persistant facultatif sur `/app/.cache`.
+- Cloud Run : `--min-instances=1 --no-cpu-throttling`, pour que le robot tourne entre deux visites.
+
+Après le déploiement, pensez à ajouter le domaine de l'application dans Firebase (Authentication → Paramètres → Domaines autorisés) pour que la connexion fonctionne.
+
 ## Scripts
 
 | Commande | Rôle |

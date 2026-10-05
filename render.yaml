@@ -1,0 +1,34 @@
+# Déploiement Render (https://render.com) : New → Blueprint → choisir ce dépôt.
+# Plan « starter » : le serveur reste allumé (le robot des sites carrières tourne en continu)
+# et le disque garde l'index entre deux déploiements. Le plan gratuit s'endort après 15 min sans visite.
+services:
+  - type: web
+    name: autopostule
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    branch: main
+    healthCheckPath: /api/health
+    disk:
+      name: autopostule-cache
+      mountPath: /app/.cache
+      sizeGB: 1
+    envVars:
+      - key: AUTH_MODE
+        value: optional
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FT_CLIENT_ID
+        sync: false
+      - key: FT_CLIENT_SECRET
+        sync: false
+      - key: LBA_API_KEY
+        sync: false
+      - key: JSEARCH_API_KEY
+        sync: false
+      - key: ADZUNA_APP_ID
+        sync: false
+      - key: ADZUNA_APP_KEY
+        sync: false
+      - key: JOOBLE_API_KEY
+        sync: false

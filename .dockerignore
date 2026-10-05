@@ -1,0 +1,11 @@
+node_modules
+dist
+.cache
+.git
+.env*
+!.env.example
+test-results
+coverage
+*.log
+_backup*
+.dev-tmp
